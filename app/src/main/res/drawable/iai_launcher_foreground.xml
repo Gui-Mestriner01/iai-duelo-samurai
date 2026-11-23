@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Sol vermelho -->
+    <path
+        android:fillColor="#B8322A"
+        android:pathData="M54,30 a20,20 0 1,1 0,40 a20,20 0 1,1 0,-40" />
+
+    <!-- Lâmina (diagonal) -->
+    <path
+        android:fillColor="#1C1814"
+        android:pathData="M30,79 L76,31 Q79,28 81,27 Q80,30 78,33 L32,81 Z" />
+
+    <!-- Tsuba (guarda) -->
+    <path
+        android:fillColor="#1C1814"
+        android:pathData="M34,71 a5,5 0 1,1 7,7 a5,5 0 1,1 -7,-7" />
+
+    <!-- Tsuka (cabo) -->
+    <path
+        android:fillColor="#1C1814"
+        android:strokeColor="#1C1814"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M35,77 L26,86" />
+</vector>
