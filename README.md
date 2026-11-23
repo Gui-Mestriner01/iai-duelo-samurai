@@ -11,6 +11,13 @@ O celular vira a sua katana: espere em silêncio, e quando o sinal aparecer, **c
 - **Registros (記録)**: vitórias, derrotas, precipitações, melhor reação, sequência, selos dos oponentes e gráfico dos últimos cortes.
 - **Ajustes (設定)**: sinal visual ou por palma, sensibilidade, modo bainha, som e vibração.
 
+## Personagens e animações
+Tudo é desenhado em código no `Canvas` do Compose, sem imagens:
+- Cada oponente tem visual próprio: Taro (cabelo espetado), Ronin (chapéu de palha), Akane (rabo de cavalo), Mestre Gensai (barba e haori) e o Oni de Kurogane (elmo com chifres dourados e armadura).
+- Saque da espada animado com rastro de luz, queda em duas etapas (joelho e tombo), respiração e roupas no vento.
+- Cenário vivo: sol com brilho, nuvens de tinta, corvos, névoa, torii, pétalas de cerejeira e câmera que aproxima na tensão.
+- `SamuraiPreviews.kt` mostra todos os personagens em todas as poses na aba Design do Android Studio.
+
 ## Sensores usados
 | Sensor | Para quê |
 |---|---|

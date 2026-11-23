@@ -31,4 +31,17 @@ object Iai {
     val Sun = Color(0xFFC8412F)
     val MountainFar = Color(0xFF9A7862)
     val MountainNear = Color(0xFF5C483C)
+    val SkyMid = Color(0xFFEFC48E)
+    val SkyTenseMid = Color(0xFFC99567)
+    val SunCore = Color(0xFFE2603F)
+    val SunGlow = Color(0xFFF08A4B)
+    val GroundTop = Color(0xFF2C241E)
+
+    // Personagens
+    val SumiLine = Color(0xFF4B4138)
+    val Rim = Color(0xFFFFB070)
+    val Steel = Color(0xFFECEAE4)
+    val SteelEdge = Color(0xFF8D9399)
+    val Ai = Color(0xFF3E5C8A)
+    val Ash = Color(0xFF8A8F94)
 }

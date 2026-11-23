@@ -1,7 +1,7 @@
 package com.gui.iai.ui.duel
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -42,6 +42,8 @@ import com.gui.iai.ui.components.InkBackButton
 import com.gui.iai.ui.components.PaperPanel
 import com.gui.iai.ui.components.SamuraiPose
 import com.gui.iai.ui.components.SceneState
+import com.gui.iai.ui.components.accentColor
+import com.gui.iai.ui.components.sceneStyle
 import com.gui.iai.ui.game.GameStage
 import com.gui.iai.ui.game.GameplayLifecycle
 import com.gui.iai.ui.game.GroundLabel
@@ -76,7 +78,7 @@ fun DuelScreen(
                 launch { effects.play() }
                 delay(140)
                 val loser = if (stage.report.winner == Side.PLAYER) opponentFall else playerFall
-                loser.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+                loser.animateTo(1f, tween(1_100, easing = LinearEasing))
             }
 
             is DuelStage.MatchOver -> Unit
@@ -102,6 +104,8 @@ fun DuelScreen(
         rightPose = if (showResult && report?.winner == Side.OPPONENT) SamuraiPose.STRIKE else SamuraiPose.GUARD,
         leftFall = playerFall.value,
         rightFall = opponentFall.value,
+        rightObi = state.opponent.accentColor(),
+        rightStyle = state.opponent.sceneStyle(),
         tension = tension
     )
 

@@ -1,7 +1,7 @@
 package com.gui.iai.ui.versus
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -76,7 +76,7 @@ fun VersusScreen(
                 if (result.foul) {
                     // Desonra: quem se precipitou cai
                     val fallen = if (result.player == 1) leftFall else rightFall
-                    fallen.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+                    fallen.animateTo(1f, tween(1_100, easing = LinearEasing))
                 }
             }
 
