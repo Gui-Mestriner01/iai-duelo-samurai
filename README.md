@@ -6,6 +6,14 @@ Um sinal. Um golpe. Uma chance.
 
 O celular vira a sua katana. Espere em silêncio e, quando o sinal aparecer, **corte o ar** o mais rápido que puder. Quem sacar primeiro vence.
 
+<p align="center">
+  <img src="docs/duelo.gif" width="32%" alt="Duelo: o samurai saca e o ronin cai">
+  <img src="docs/derrota.gif" width="32%" alt="Derrota: a espada escapa da mão">
+  <img src="docs/kage.gif" width="32%" alt="Kage se desfaz em fumaça">
+</p>
+
+**Versão 2.1** (25/11/2026): mortes com física (joelhos cedendo, tombo, espada caindo), saque e noto mais realistas, personagens mais detalhados e um fim próprio para cada chefe sobrenatural.
+
 **Versão 2.0** (25/11/2026): chefes com regras próprias, modo Hordas, história em mangá, loja, conquistas, Iai Perfeito e testes automáticos.
 
 ## Modos
@@ -41,7 +49,17 @@ O celular vira a sua katana. Espere em silêncio e, quando o sinal aparecer, **c
 Um corte em até **260 ms** é um Iai Perfeito: vale dois golpes no duelo, dá moedas extras e ativa uma câmera lenta dourada.
 
 ## Animações
-Os personagens são desenhados com Canvas em um esqueleto com cinemática inversa nos braços. O golpe segue uma linha do tempo com antecipação, impacto e retorno. Faixas, cabelo e roupas usam física de corrente (Verlet). A cena tem câmera própria com hit-stop, câmera lenta e tremor, e são 3 arenas (entardecer, neve e noite).
+Tudo é desenhado com Canvas, sem nenhuma imagem, em um esqueleto com cinemática inversa nos braços e nas pernas.
+
+- **Saque (iai):** o polegar solta a guarda (koiguchi) e ela brilha, a lâmina sai com um brilho correndo pelo aço e uma estrela na ponta no impacto. Depois vêm o zanshin, o chiburi (sacudir a lâmina) e o noto: a ponta vai até a boca da bainha e a lâmina desliza para dentro.
+- **Morte:** um instante parado depois do corte, cambaleio, os joelhos cedem e o corpo tomba acelerando como na gravidade, quica no chão e levanta poeira. Os braços perdem a força e a espada escapa da mão, gira e fica no chão. Quem usa armadura pesada cai de costas.
+- **Fim dos chefes:** Kage se desfaz em fumaça, Yuki vira neve, Tengu explode em penas e a armadura do Oni racha e solta pedaços.
+- **Detalhes:** olhos que piscam e mudam de expressão (foco, susto, fechados), mãos fechadas no cabo ou abertas, hakama com pregas e barra em sino, sandálias, habaki dourado na lâmina.
+- **Movimento:** respiração, peso passando de um pé para o outro, física de corrente (Verlet) em faixas, cabelo e cachecol, câmera com hit-stop e câmera lenta, e 3 arenas (entardecer, neve e noite).
+
+| Golpe quadro a quadro | Morte quadro a quadro |
+|---|---|
+| ![Golpe](docs/folha-golpe.png) | ![Morte](docs/folha-morte.png) |
 
 ## Sensores usados
 | Sensor | Para quê |
@@ -60,7 +78,8 @@ Os testes de unidade (JUnit) ficam em `app/src/test` e cobrem:
 - o motor das Hordas;
 - a loja e as conquistas;
 - as regras dos chefes;
-- a linha do tempo do golpe.
+- a linha do tempo do golpe;
+- a linha do tempo da morte e do noto.
 
 O GitHub Actions (`.github/workflows/android.yml`) roda `testDebugUnitTest` e `assembleDebug` a cada push e guarda o APK como artefato.
 

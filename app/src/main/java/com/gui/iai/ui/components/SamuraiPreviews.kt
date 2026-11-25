@@ -15,23 +15,36 @@ import com.gui.iai.ui.theme.Iai
  * Folha de modelos dos personagens para conferir no painel de Preview do
  * Android Studio, sem precisar jogar: cada linha é um personagem e cada
  * coluna um momento: guarda, antecipação, meio do saque, zanshin, chiburi,
- * tranco do corte e caído.
+ * noto (embainhando), tranco do corte e caído.
  */
-@Preview(name = "Folha de personagens", widthDp = 560, heightDp = 1200)
+@Preview(name = "Folha de personagens", widthDp = 640, heightDp = 1200)
 @Composable
 private fun SamuraiModelSheet() {
+    SamuraiSheet(
+        listOf(
+            -1f to 0f,
+            60f to 0f,
+            150f to 0f,
+            600f to 0f,
+            1080f to 0f,
+            1450f to 0f,
+            1850f to 0f,
+            -1f to 1f
+        )
+    )
+}
+
+/** A morte quadro a quadro: tranco, cambaleio, joelhos, tombo, chão e o fim de cada chefe. */
+@Preview(name = "Animação de morte", widthDp = 640, heightDp = 1200)
+@Composable
+private fun SamuraiDeathSheet() {
+    SamuraiSheet(listOf(-1f to 0.06f, -1f to 0.2f, -1f to 0.38f, -1f to 0.52f, -1f to 0.64f, -1f to 0.76f, -1f to 0.86f, -1f to 1f))
+}
+
+@Composable
+private fun SamuraiSheet(poses: List<Pair<Float, Float>>) {
     val styles = SamuraiStyle.entries
     val accents = listOf(Iai.Shu, Iai.Ai, Iai.Ash, Iai.ShuBright, Iai.Washi, Iai.Kin, Iai.Ice, Iai.ShuBright, Iai.Yoru, Iai.Ai)
-    // tempo do golpe (ms, negativo = guarda) e queda
-    val poses = listOf(
-        -1f to 0f,
-        60f to 0f,
-        150f to 0f,
-        600f to 0f,
-        1080f to 0f,
-        -1f to 0.12f,
-        -1f to 1f
-    )
     Canvas(
         Modifier
             .fillMaxSize()

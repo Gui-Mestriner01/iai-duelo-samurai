@@ -15,6 +15,9 @@ const val STRIKE_IMPACT_MS = 190f
 /** Fim do golpe: depois disso o samurai já embainhou e voltou à guarda. */
 const val STRIKE_TOTAL_MS = 2600f
 
+/** Duração da animação de morte, em segundos de cena. */
+const val DEATH_DURATION_S = 2.0f
+
 /**
  * Uma pose do golpe.
  * @param draw progresso do saque (0 = na bainha, 1 = lâmina toda à frente)
@@ -24,6 +27,8 @@ const val STRIKE_TOTAL_MS = 2600f
  * @param drop quanto o quadril abaixa
  * @param tilt giro extra da lâmina em radianos (usado no chiburi)
  * @param lift deslocamento vertical da mão (negativo = para cima)
+ * @param sheathe noto: 0 = sem embainhar, 0..1 = leva a ponta até a boca da bainha,
+ * 1..2 = a lâmina desliza para dentro
  */
 class StrikePose(
     val draw: Float,
@@ -32,7 +37,8 @@ class StrikePose(
     val lean: Float,
     val drop: Float,
     val tilt: Float,
-    val lift: Float
+    val lift: Float,
+    val sheathe: Float = 0f
 )
 
 val GuardPose = StrikePose(0f, 0f, 0f, 0f, 0f, 0f, 0f)
@@ -45,7 +51,8 @@ private val ZanshinPose = StrikePose(1f, 1f, 1f, 0f, 0f, 0f, 0f)
  *  - 220–340 ms  acomodação da pose
  *  - 340–950 ms  zanshin: pose congelada, atenção total
  *  - 950–1300 ms chiburi: ergue a lâmina e sacode o sangue com um golpe seco
- *  - 1300–2200   noto: embainha devagar
+ *  - 1300–1550   noto: a ponta da lâmina vai até a boca da bainha, por cima
+ *  - 1550–2200   a lâmina desliza devagar para dentro
  *  - 2200–2600   volta à postura de pé
  */
 fun strikePose(ms: Float): StrikePose {
@@ -94,9 +101,14 @@ fun strikePose(ms: Float): StrikePose {
             StrikePose(1f, 1f, 1f, 0f, 0f, tilt, lift)
         }
 
+        ms < 1550f -> {
+            val k = (ms - 1300f) / 250f
+            StrikePose(1f, 1f, mix(1f, 0.75f, easeInOut(k)), 0f, 0f, 0f, 0f, sheathe = k)
+        }
+
         ms < 2200f -> {
-            val k = easeInOut((ms - 1300f) / 900f)
-            StrikePose(1f - k, 1f - k, mix(1f, 0.15f, k), 0f, 0f, 0f, 0f)
+            val k = (ms - 1550f) / 650f
+            StrikePose(1f, 1f, mix(0.75f, 0.15f, easeInOut(k)), 0f, 0f, 0f, 0f, sheathe = 1f + k)
         }
 
         else -> {
@@ -112,6 +124,79 @@ fun strikeTrail(ms: Float): Float = when {
     ms < 320f -> 1f
     ms < 650f -> 1f - (ms - 320f) / 330f
     else -> 0f
+}
+
+// ---- Morte -----------------------------------------------------------------
+
+/**
+ * Pose de quem foi cortado, em cada instante da queda.
+ * @param recoil tranco do corte (0..1, sobe e desce)
+ * @param kneel pernas indo da posição de pé até os joelhos no chão (ou sentado, para trás)
+ * @param lie pernas indo para o chão, com o corpo deitado
+ * @param angle inclinação do tronco em graus (positivo = para a frente)
+ * @param limp braços soltos, sem força (0..1)
+ * @param droop cabeça caindo e olhos fechando (0..1)
+ * @param landed progresso da poeira depois que o corpo bate no chão (0 = ainda no ar)
+ */
+class DeathPose(
+    val recoil: Float,
+    val kneel: Float,
+    val lie: Float,
+    val angle: Float,
+    val limp: Float,
+    val droop: Float,
+    val landed: Float
+) {
+    companion object {
+        val NONE = DeathPose(0f, 0f, 0f, 0f, 0f, 0f, 0f)
+    }
+}
+
+/** Instante (fração da queda) em que a espada escapa da mão. */
+const val DEATH_DROP_AT = 0.07f
+
+/** Instante em que o corpo bate no chão. */
+const val DEATH_LAND_AT = 0.74f
+
+/**
+ * Linha do tempo da morte, no estilo dos filmes de samurai:
+ *  - 0–0.1    tranco do corte, a espada escapa da mão
+ *  - 0.1–0.24 um instante parado, cambaleando, com a cabeça baixando
+ *  - 0.24–0.48 os joelhos cedem (ou, para trás, ele senta)
+ *  - 0.46–0.74 o tronco tomba, acelerando como na gravidade
+ *  - 0.74–0.9 bate no chão, quica um pouco e se acomoda
+ *
+ * @param backward true para quem cai de costas (os de armadura pesada)
+ */
+fun deathPose(fall: Float, backward: Boolean): DeathPose {
+    if (fall <= 0f) return DeathPose.NONE
+    val f = fall.coerceAtMost(1f)
+    val recoil = sin(PI_FLOAT * (f / 0.09f).coerceIn(0f, 1f))
+    val limp = easeOutCubic((f - 0.04f) / 0.18f)
+    val droop = easeInOut((f - 0.08f) / 0.3f)
+    val kneel = easeInOut((f - 0.24f) / 0.24f)
+    val t = ((f - 0.46f) / (DEATH_LAND_AT - 0.46f)).coerceIn(0f, 1f)
+    val lie = easeInOut(t)
+    val gravity = t * t
+
+    // Cambaleio enquanto ainda está de pé
+    val wobble = sin((f - 0.08f) * 38f) * 3f * windowOf(f, 0.08f, 0.3f)
+    val bounceK = ((f - DEATH_LAND_AT) / 0.16f).coerceIn(0f, 1f)
+    val bounce = 7f * sin(PI_FLOAT * bounceK) * (1f - bounceK)
+
+    val angle = if (backward) {
+        -6f * recoil - wobble + mix(-12f * kneel, -88f, gravity) + bounce
+    } else {
+        -6f * recoil + wobble + mix(22f * kneel, 90f, gravity) - bounce
+    }
+    val landed = if (f < DEATH_LAND_AT) 0f else ((f - DEATH_LAND_AT) / (1f - DEATH_LAND_AT)).coerceIn(0f, 1f)
+    return DeathPose(recoil, kneel, lie, angle, limp, droop, landed)
+}
+
+/** 1 dentro do intervalo, com bordas suaves; 0 fora. */
+private fun windowOf(x: Float, start: Float, end: Float): Float {
+    if (x <= start || x >= end) return 0f
+    return sin(PI_FLOAT * (x - start) / (end - start))
 }
 
 // ---- Física de tecido e cabelo ---------------------------------------------

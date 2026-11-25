@@ -178,7 +178,7 @@ private const val SLOW_SCALE = 0.3f
 private const val PERFECT_SLOW_END_MS = 560f
 private const val WALK_IN_S = 0.9f
 
-private const val FALL_S = 1.2f
+private const val FALL_S = DEATH_DURATION_S
 private const val CUT_S = 0.7f
 
 /**

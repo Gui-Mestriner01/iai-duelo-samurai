@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp as lerpColor
 import com.gui.iai.ui.theme.Iai
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -80,6 +81,9 @@ class SamuraiColors(
 
 private const val PI_F = PI.toFloat()
 
+/** Área desenhada por um personagem (para a camada de transparência ao se desfazer). */
+private val FIGURE_BOUNDS = Rect(-280f, -300f, 300f, 80f)
+
 /**
  * Desenha um samurai em silhueta de tinta com contraluz do sol.
  * Coordenadas internas: pés em (0,0), altura ~150, frente para +x.
@@ -87,7 +91,8 @@ private const val PI_F = PI.toFloat()
  * @param strikeMs tempo desde o início do golpe em ms (negativo = em guarda); a pose
  * vem da linha do tempo em [strikePose]
  * @param crouch 0..1 tensão: o corpo abaixa e se inclina esperando o sinal
- * @param fall 0 = em pé; tranco do corte, depois cai de joelhos e por fim tomba
+ * @param fall 0..1 morte: tranco do corte, joelhos cedendo, tombo e o corpo no chão
+ * (linha do tempo em [deathPose])
  * @param wind -1..1 vento nas mangas, fitas e cabelo
  * @param time segundos da cena (respeita câmera lenta e hit-stop)
  * @param physics estado do tecido e do cabelo entre quadros; sem ele, tudo fica em repouso
@@ -109,55 +114,91 @@ fun DrawScope.drawSamurai(
     val scale = height * style.heightFactor / 150f
     val direction = if (facingRight) 1f else -1f
 
-    // Queda em três tempos: tranco do golpe, joelhos no chão, tombo
-    val recoil = sin(PI_F * (fall / 0.18f).coerceIn(0f, 1f))
-    val kneel = easeOutCubic((fall - 0.12f) / 0.4f)
-    val topple = easeIn(((fall - 0.4f) / 0.6f).coerceIn(0f, 1f))
-    // O Oni, pesado de armadura, cai para trás; os outros tombam para frente
+    // O Oni e o Kage, pesados de armadura, caem de costas; os outros tombam para a frente
     val backward = style == SamuraiStyle.ONI || style == SamuraiStyle.KAGE
+    val death = deathPose(fall, backward)
 
+    // Quem é cortado no meio do próprio golpe congela no corte (não embainha depois de morto)
+    val ms = if (fall > 0f && strikeMs >= 0f) minOf(strikeMs, 240f) else strikeMs
     val figureTime = time + if (facingRight) 0f else 1.7f
-    val rig = buildRig(style, strikePose(strikeMs), crouch * (1f - kneel), kneel, recoil, wind, figureTime)
+    val rig = buildRig(style, strikePose(ms), crouch * (1f - death.kneel), death, wind, figureTime)
+    val legs = buildLegs(rig, death, backward)
+    val body = BodyFrame(death.angle, Offset(0f, rig.hipY), legs.hip - Offset(0f, rig.hipY))
     val hatFlying = style == SamuraiStyle.RONIN && fall > 0.15f
     phys.advance(time)
-    val cloth = stepCloth(rig, style, phys, wind, figureTime, hatOn = !hatFlying)
-    val trail = if (strikeMs >= 0f) strikeTrail(strikeMs) else 0f
+    val cloth = stepCloth(rig, style, phys, wind, figureTime, hatOn = !hatFlying, bodyAngle = death.angle)
+    val trail = if (ms >= 0f && fall <= 0f) strikeTrail(ms) else 0f
+    val swordDropped = fall >= DEATH_DROP_AT && rig.bladeVisible
+    val eyes = eyesFor(ms, death, figureTime)
+    val fade = dissolve(style, fall)
 
     withTransform({
         translate(feet.x, feet.y)
         scale(scaleX = scale * direction, scaleY = scale, pivot = Offset.Zero)
     }) {
-        // Sombra no chão
+        // Sombra no chão: se alonga quando o corpo deita
+        val chest = body.toWorld(Offset(rig.lean * 0.5f, rig.hipY - 18f))
+        val feetMid = (legs.frontAnkle.x + legs.backAnkle.x) / 2f
+        val shadowX = mix(2f, (chest.x + feetMid) / 2f, death.lie)
+        val shadowW = 76f + 58f * death.lie
         drawOval(
-            Color.Black.copy(alpha = 0.32f * (1f - topple * 0.5f)),
-            topLeft = Offset(-36f - (if (backward) 30f * topple else 0f), -2.6f),
-            size = Size(76f + topple * 40f, 5.2f)
+            Color.Black.copy(alpha = 0.32f * (0.35f + 0.65f * fade)),
+            topLeft = Offset(shadowX - shadowW / 2f, -2.6f),
+            size = Size(shadowW, 5.2f)
         )
 
-        val pivot = Offset(if (backward) rig.backFoot else rig.frontFoot, 0f)
-        rotate(degrees = (if (backward) -72f else 80f) * topple, pivot = pivot) {
-            // Rastros fantasma durante o saque, como num anime
-            if (strikeMs in 80f..300f) {
-                for (g in 2 downTo 1) {
-                    val ghost = buildRig(style, strikePose(strikeMs - 26f * g), crouch, 0f, 0f, wind, figureTime)
-                    drawGhost(ghost, style, colors, cloth, phys, alpha = 0.22f / g)
-                }
-            }
+        val layered = fade < 1f
+        if (layered) drawContext.canvas.saveLayer(FIGURE_BOUNDS, Paint().apply { alpha = fade.coerceIn(0f, 1f) })
 
-            // Contraluz em dois tons: borda laranja e uma faixa de meia-luz por dentro,
-            // o que dá volume à silhueta sem perder o estilo de tinta
-            translate(1.6f, -0.5f) {
-                drawFigure(rig, style, colors, tint = colors.rim, hatOn = !hatFlying, cloth = cloth, phys = phys)
+        // Rastros fantasma durante o saque, como num anime
+        if (ms in 80f..300f && fall <= 0f) {
+            for (g in 2 downTo 1) {
+                val ghost = buildRig(style, strikePose(ms - 26f * g), crouch, DeathPose.NONE, wind, figureTime)
+                drawGhost(ghost, buildLegs(ghost, DeathPose.NONE, backward), style, colors, cloth, phys, alpha = 0.22f / g)
             }
-            translate(0.7f, -0.2f) {
-                drawFigure(rig, style, colors, tint = lerpColor(colors.ink, colors.rim, 0.38f), hatOn = !hatFlying, cloth = cloth, phys = phys)
-            }
-            drawFigure(rig, style, colors, tint = null, hatOn = !hatFlying, cloth = cloth, phys = phys)
-            drawBlade(rig, colors, trail)
         }
+
+        // Contraluz em dois tons: borda laranja e uma faixa de meia-luz por dentro,
+        // o que dá volume à silhueta sem perder o estilo de tinta
+        translate(1.6f, -0.5f) {
+            drawFigure(rig, legs, body, style, colors, colors.rim, !hatFlying, cloth, phys, eyes, !swordDropped)
+        }
+        translate(0.7f, -0.2f) {
+            drawFigure(rig, legs, body, style, colors, lerpColor(colors.ink, colors.rim, 0.38f), !hatFlying, cloth, phys, eyes, !swordDropped)
+        }
+        drawFigure(rig, legs, body, style, colors, null, !hatFlying, cloth, phys, eyes, !swordDropped)
+        if (!swordDropped) withBody(body) { drawBlade(rig, colors, trail, ms) }
+        if (style == SamuraiStyle.ONI && fall > 0.03f) withBody(body) { drawArmorCracks(rig, colors, fall) }
+
+        if (layered) drawContext.canvas.restore()
+
+        // A espada que escapou da mão rodopia, quica e fica no chão
+        if (swordDropped) drawDroppedSword(rig, colors, fall)
 
         // Respingos no corte: tinta vermelha, ou faíscas na armadura do Oni
         drawCutSpray(rig, style, fall)
+
+        // Poeira quando o corpo bate no chão
+        if (death.landed > 0f) drawDust(chest.x, death.landed, heavy = backward, c = colors)
+
+        // Cada chefe sobrenatural some do seu jeito
+        if (fall > 0f) {
+            val points = listOf(
+                body.toWorld(rig.head),
+                body.toWorld(Offset(rig.lean * 0.6f, rig.shoulderY + 8f)),
+                legs.hip,
+                legs.frontKnee,
+                legs.backKnee,
+                body.toWorld(rig.frontShoulder)
+            )
+            when (style) {
+                SamuraiStyle.KAGE -> drawSmoke(points, fall, colors, time)
+                SamuraiStyle.YUKI -> drawSnowBurst(points, fall)
+                SamuraiStyle.TENGU -> drawFeathers(points, fall, colors)
+                SamuraiStyle.ONI -> drawArmorDebris(rig, fall, colors)
+                else -> Unit
+            }
+        }
 
         if (hatFlying) {
             val flight = easeOut(((fall - 0.15f) / 0.85f).coerceIn(0f, 1f))
@@ -177,6 +218,7 @@ fun DrawScope.drawSamurai(
 /** Cópia translúcida do corpo numa pose anterior (borrão de movimento). */
 private fun DrawScope.drawGhost(
     rig: Rig,
+    legs: Legs,
     style: SamuraiStyle,
     colors: SamuraiColors,
     cloth: ClothState,
@@ -185,10 +227,53 @@ private fun DrawScope.drawGhost(
 ) {
     // A camada junta todas as partes antes de aplicar a transparência,
     // assim as sobreposições não ficam mais escuras
-    drawContext.canvas.saveLayer(Rect(-240f, -260f, 260f, 60f), Paint().apply { this.alpha = alpha })
-    drawFigure(rig, style, colors, tint = colors.rim, hatOn = true, cloth = cloth, phys = phys)
-    drawBlade(rig, colors, trail = 0f)
+    drawContext.canvas.saveLayer(FIGURE_BOUNDS, Paint().apply { this.alpha = alpha })
+    drawFigure(rig, legs, BodyFrame(0f, Offset(0f, rig.hipY), Offset.Zero), style, colors, colors.rim, true, cloth, phys, Eyes.OPEN, true)
+    drawBlade(rig, colors, trail = 0f, ms = -1f)
     drawContext.canvas.restore()
+}
+
+/** Expressão dos olhos. */
+private enum class Eyes { OPEN, FOCUS, SHOCK, CLOSED }
+
+private fun eyesFor(ms: Float, death: DeathPose, time: Float): Eyes = when {
+    death.droop > 0.55f -> Eyes.CLOSED
+    death.recoil > 0.02f || death.limp > 0f -> Eyes.SHOCK
+    ms in 60f..1300f -> Eyes.FOCUS
+    // Piscada de vez em quando
+    (time * 0.31f) % 1f < 0.035f -> Eyes.CLOSED
+    else -> Eyes.OPEN
+}
+
+/** Opacidade de quem some ao morrer: Kage vira fumaça, Yuki vira neve, Tengu vira penas. */
+private fun dissolve(style: SamuraiStyle, fall: Float): Float = when (style) {
+    SamuraiStyle.KAGE -> 1f - easeInCubic((fall - 0.62f) / 0.3f)
+    SamuraiStyle.YUKI -> 1f - easeInOut((fall - 0.55f) / 0.35f)
+    SamuraiStyle.TENGU -> 1f - easeInOut((fall - 0.5f) / 0.22f)
+    else -> 1f
+}
+
+/**
+ * Referencial do tronco: gira em volta do quadril e acompanha o quadril quando ele
+ * desce (joelhos) ou vai ao chão. Braços, cabeça e tecido são desenhados nele;
+ * as pernas são desenhadas fora, ligando o quadril aos pés.
+ */
+private class BodyFrame(val angle: Float, val pivot: Offset, val shift: Offset) {
+    private val rad = angle * PI_F / 180f
+    val identity = angle == 0f && shift == Offset.Zero
+
+    fun toWorld(p: Offset): Offset = rotateVector(p - pivot, rad) + pivot + shift
+}
+
+private inline fun DrawScope.withBody(body: BodyFrame, crossinline block: DrawScope.() -> Unit) {
+    if (body.identity) {
+        block()
+    } else {
+        withTransform({
+            translate(body.shift.x, body.shift.y)
+            rotate(body.angle, body.pivot)
+        }) { block() }
+    }
 }
 
 /** Atraso das mangas e da barra, calculado uma vez por quadro. */
@@ -203,20 +288,26 @@ private const val HAIR = "hair"
 private const val BOW = "bow"
 private const val SCARF = "scarf"
 
-/** Avança a física de fitas, cabelo, laço, mangas e barra para este quadro. */
+/**
+ * Avança a física de fitas, cabelo, laço, mangas e barra para este quadro.
+ * As correntes vivem no referencial do tronco; a gravidade e o vento são girados
+ * para dentro dele, então o cabelo continua caindo para baixo quando o corpo tomba.
+ */
 private fun stepCloth(
     rig: Rig,
     style: SamuraiStyle,
     phys: FigurePhysics,
     wind: Float,
     time: Float,
-    hatOn: Boolean
+    hatOn: Boolean,
+    bodyAngle: Float
 ): ClothState {
     val dt = phys.dt
     // O vento empurra para trás e a gravidade puxa para baixo; o cabelo é mais pesado
-    val drag = 150f + 90f * wind
-    val light = Offset(-drag, 70f)
-    val heavy = Offset(-drag * 0.55f, 170f)
+    val drag = (150f + 90f * wind) * (1f - rig.limp * 0.6f)
+    val toBody = -bodyAngle * PI_F / 180f
+    val light = rotateVector(Offset(-drag, 70f), toBody)
+    val heavy = rotateVector(Offset(-drag * 0.55f, 170f), toBody)
     val back = Offset(-0.9f, 0.45f)
 
     val knotA = Offset(-14f, rig.hipY)
@@ -265,7 +356,7 @@ private fun stepCloth(
     )
 }
 
-/** Posição de cada parte do corpo neste quadro. */
+/** Posição de cada parte do tronco e dos braços neste quadro (referencial do tronco). */
 private class Rig(
     val l: Float,
     val draw: Float,
@@ -286,61 +377,122 @@ private class Rig(
     val tsuba: Offset,
     val pommel: Offset,
     val bladeDir: Offset,
+    val bladeLength: Float,
     val bladeVisible: Boolean,
     val sweep: Float,
+    /** Guarda e direção da espada ainda na mão (de onde ela escapa ao morrer). */
+    val gripTsuba: Offset,
+    val gripAxis: Offset,
+    val limp: Float,
     val wind: Float,
     val time: Float
 )
 
 private const val UPPER_ARM = 14f
 private const val FOREARM = 14f
+private const val THIGH = 33f
+private const val SHIN = 33f
 
 private fun buildRig(
     style: SamuraiStyle,
     pose: StrikePose,
     crouch: Float,
-    kneel: Float,
-    recoil: Float,
+    death: DeathPose,
     wind: Float,
     time: Float
 ): Rig {
     val l = pose.lunge
     val lc = l.coerceIn(0f, 1f)
-    val breathe = sin(time * 2.1f) * (1f - kneel)
-    val drop = 4f * crouch + 8f * l + 20f * kneel + pose.drop
+    val alive = 1f - death.limp
+    val breathe = sin(time * 2.1f) * alive
+    // O peso passa devagar de um pé para o outro enquanto ele espera
+    val sway = sin(time * 0.83f) * 1.4f * (1f - crouch) * (1f - lc) * alive
+    val drop = 4f * crouch + 8f * l + pose.drop
     val hipY = -64f + drop
     val shoulderY = hipY - 33f - breathe * 0.7f
-    val lean = 2f + 3f * crouch + 12f * l + 4f * kneel + pose.lean - 7f * recoil
+    val lean = 2f + 3f * crouch + 12f * l + pose.lean - 7f * death.recoil + sway
     val sw = style.shoulderFactor
-    val head = Offset(3f + lean - 2f * recoil, shoulderY - 11f - breathe * 0.2f + 1.5f * recoil)
+    val head = Offset(
+        3f + lean - 2f * death.recoil + sway * 0.4f + 2.5f * death.droop,
+        shoulderY - 11f - breathe * 0.2f + 1.5f * death.recoil + 3.5f * death.droop
+    )
     val frontShoulder = Offset(9f * sw + lean, shoulderY + 3f)
     val backShoulder = Offset(-9f * sw + lean, shoulderY + 3f)
 
     // Bainha: no saque ela é puxada para trás (saya-biki)
     val sayaMouth = lerp(Offset(7f, hipY - 3f), Offset(-1f, hipY + 1f), lc)
-    val sayaEnd = lerp(Offset(-46f, hipY + 13f), Offset(-56f, hipY + 5f), lc)
+    // Deitado, a bainha acompanha as pernas em vez de ficar espetada para cima
+    val sayaEnd = lerp(lerp(Offset(-46f, hipY + 13f), Offset(-56f, hipY + 5f), lc), sayaMouth + Offset(-14f, 48f), death.lie)
+    val sayaAxis = normalize(sayaEnd - sayaMouth)
 
     // Mão da frente: do cabo, na cintura, até o braço estendido; sobe num arco
     val guardHand = Offset(14f, hipY - 7.5f)
     val strikeHand = Offset(44f + lean * 0.3f, shoulderY + 1f)
     val arm = pose.arm
-    val frontHand = lerp(guardHand, strikeHand, arm) +
+    var frontHand = lerp(guardHand, strikeHand, arm) +
         Offset(0f, -7f * sin(PI_F * arm.coerceIn(0f, 1f)) + pose.lift)
-    val backHand = lerp(Offset(5f, hipY - 2f), Offset(-6f, hipY + 1f), lc)
+    var backHand = lerp(Offset(5f, hipY - 2f), Offset(-6f, hipY + 1f), lc)
 
     // Espada: até 22% do saque ainda está na bainha; depois varre de trás para frente.
     // No chiburi a lâmina ainda gira um pouco a mais (tilt).
-    val bladeVisible = pose.draw > 0.22f
+    var bladeVisible = pose.draw > 0.22f
     val sweep = ((pose.draw - 0.22f) / 0.78f).coerceIn(0f, 1.1f)
-    val bladeDir = if (bladeVisible) {
+    var bladeDir = if (bladeVisible) {
         val phi = PI_F * (1f - sweep)
         rotateVector(Offset(cos(phi), -0.13f - 0.12f * sin(phi)), pose.tilt)
     } else {
         Offset(-0.87f, 0.5f)
     }
+    var bladeLength = 72f
+
+    // Noto: a ponta passa por cima até a boca da bainha e a lâmina desliza para dentro
+    if (pose.sheathe > 0f) {
+        val notoHand = Offset(34f + lean * 0.3f, shoulderY + 12f)
+        if (pose.sheathe <= 1f) {
+            val e = easeInOut(pose.sheathe)
+            frontHand = lerp(strikeHand, notoHand, e)
+            val entry = sayaMouth - frontHand
+            val from = atan2(bladeDir.y, bladeDir.x)
+            var to = atan2(entry.y, entry.x)
+            while (to > from) to -= 2f * PI_F
+            val angle = mix(from, to, e)
+            bladeDir = Offset(cos(angle), sin(angle))
+            val reach = entry.getDistance() - 5f
+            bladeLength = mix(72f, reach, easeInOut((pose.sheathe - 0.55f) / 0.45f))
+        } else {
+            val e = easeInOut(pose.sheathe - 1f)
+            frontHand = lerp(notoHand, guardHand, e)
+            val toMouth = sayaMouth - frontHand
+            bladeDir = normalize(toMouth)
+            bladeLength = (toMouth.getDistance() - 5f).coerceAtLeast(0f)
+            bladeVisible = bladeLength > 1.5f
+        }
+    }
+
     val axis = normalize(bladeDir)
-    val tsuba = frontHand + axis * 5f
-    val pommel = frontHand - axis * 14f
+    val gripTsuba = frontHand + axis * 5f
+
+    // Morto: os braços perdem a força e pendem com a gravidade; no chão, ficam esparramados
+    if (death.limp > 0f) {
+        val down = rotateVector(Offset(0f, 1f), -death.angle * PI_F / 180f)
+        val hangFront = frontShoulder + down * 25f + Offset(2f, 0f)
+        val hangBack = backShoulder + down * 25f
+        val sprawlFront = frontShoulder + Offset(5f, -25f)
+        val sprawlBack = backShoulder + Offset(5f, 22f)
+        // Durante o tombo os braços já vão se abrindo, assim não atravessam o chão
+        val sprawl = easeOutCubic(death.kneel * 0.35f + death.lie * 1.4f)
+        frontHand = lerp(frontHand, lerp(hangFront, sprawlFront, sprawl), death.limp)
+        backHand = lerp(backHand, lerp(hangBack, sprawlBack, sprawl), death.limp)
+    }
+
+    var tsuba = frontHand + axis * 5f
+    var pommel = frontHand - axis * 14f
+    if (!bladeVisible) {
+        // Espada na bainha: o cabo fica na cintura mesmo quando a mão solta
+        val sheathTsuba = sayaMouth - sayaAxis * 2.5f
+        tsuba = lerp(tsuba, sheathTsuba, death.limp)
+        pommel = lerp(pommel, sheathTsuba - sayaAxis * 14f, death.limp)
+    }
 
     return Rig(
         l = l,
@@ -348,42 +500,104 @@ private fun buildRig(
         hipY = hipY,
         shoulderY = shoulderY,
         lean = lean,
-        frontFoot = 22f + 12f * l - 6f * kneel,
+        frontFoot = 22f + 12f * l,
         backFoot = -21f - 10f * l,
         head = head,
         frontShoulder = frontShoulder,
         backShoulder = backShoulder,
         frontHand = frontHand,
         backHand = backHand,
-        frontElbow = solveElbow(frontShoulder, frontHand),
-        backElbow = solveElbow(backShoulder, backHand),
+        frontElbow = solveJoint(frontShoulder, frontHand, UPPER_ARM, FOREARM, kneeForward = false),
+        backElbow = solveJoint(backShoulder, backHand, UPPER_ARM, FOREARM, kneeForward = false),
         sayaMouth = sayaMouth,
         sayaEnd = sayaEnd,
         tsuba = tsuba,
         pommel = pommel,
         bladeDir = bladeDir,
+        bladeLength = bladeLength,
         bladeVisible = bladeVisible,
         sweep = sweep,
+        gripTsuba = gripTsuba,
+        gripAxis = axis,
+        limp = death.limp,
         wind = wind,
         time = time
     )
 }
 
+/** Pernas no referencial do mundo: quadril, joelhos e tornozelos. */
+private class Legs(
+    val hip: Offset,
+    val frontHip: Offset,
+    val backHip: Offset,
+    val frontKnee: Offset,
+    val backKnee: Offset,
+    val frontAnkle: Offset,
+    val backAnkle: Offset,
+    val waistFront: Offset,
+    val waistBack: Offset
+)
+
+/** Pose-chave das pernas: quadril, joelhos e tornozelos. */
+private class LegKey(val hip: Offset, val frontKnee: Offset, val backKnee: Offset, val frontAnkle: Offset, val backAnkle: Offset)
+
+/** De joelhos, com as canelas no chão. */
+private val KneelForward = LegKey(Offset(3f, -37f), Offset(10f, -4f), Offset(2f, -4f), Offset(-21f, -3f), Offset(-28f, -3f))
+
+/** De bruços, com as pernas esticadas para trás. */
+private val LieForward = LegKey(Offset(18f, -13f), Offset(-14f, -7f), Offset(-15f, -11f), Offset(-46f, -5f), Offset(-46f, -10f))
+
+/** Sentado no chão, joelhos para cima. */
+private val SitBackward = LegKey(Offset(-8f, -21f), Offset(18f, -34f), Offset(12f, -30f), Offset(32f, -3f), Offset(27f, -3f))
+
+/** De costas no chão, joelhos dobrados. */
+private val LieBackward = LegKey(Offset(-16f, -13f), Offset(10f, -30f), Offset(6f, -24f), Offset(30f, -3f), Offset(26f, -3f))
+
+private fun buildLegs(rig: Rig, death: DeathPose, backward: Boolean): Legs {
+    val rad = death.angle * PI_F / 180f
+    val standHip = Offset(0f, rig.hipY)
+    val standFrontAnkle = Offset(rig.frontFoot, -3f)
+    val standBackAnkle = Offset(rig.backFoot, -3f)
+    val standFrontKnee = solveJoint(standHip + Offset(4.5f, 3f), standFrontAnkle, THIGH, SHIN, kneeForward = true)
+    val standBackKnee = solveJoint(standHip + Offset(-4.5f, 3f), standBackAnkle, THIGH, SHIN, kneeForward = true)
+
+    val k = if (backward) SitBackward else KneelForward
+    val g = if (backward) LieBackward else LieForward
+    fun blend(stand: Offset, kneel: Offset, lie: Offset) = lerp(lerp(stand, kneel, death.kneel), lie, death.lie)
+
+    val hip = blend(standHip, k.hip, g.hip)
+    return Legs(
+        hip = hip,
+        frontHip = hip + rotateVector(Offset(4.5f, 3f), rad),
+        backHip = hip + rotateVector(Offset(-4.5f, 3f), rad),
+        frontKnee = blend(standFrontKnee, k.frontKnee, g.frontKnee),
+        backKnee = blend(standBackKnee, k.backKnee, g.backKnee),
+        frontAnkle = blend(standFrontAnkle, k.frontAnkle, g.frontAnkle),
+        backAnkle = blend(standBackAnkle, k.backAnkle, g.backAnkle),
+        waistFront = hip + rotateVector(Offset(14f, -1f), rad),
+        waistBack = hip + rotateVector(Offset(-14f, -1f), rad)
+    )
+}
+
 /**
- * Cinemática inversa de dois ossos: com o ombro e a mão definidos, acha o cotovelo
- * pela lei dos cossenos, mantendo braço e antebraço do mesmo tamanho. O cotovelo
- * dobra sempre para baixo.
+ * Cinemática inversa de dois ossos: com a raiz e a ponta definidas, acha a junta do
+ * meio pela lei dos cossenos, mantendo os dois ossos do mesmo tamanho. Cotovelos
+ * dobram para baixo; joelhos, para a frente.
  */
-private fun solveElbow(shoulder: Offset, hand: Offset): Offset {
-    val d = hand - shoulder
+private fun solveJoint(root: Offset, end: Offset, first: Float, second: Float, kneeForward: Boolean): Offset {
+    val d = end - root
     val rawDist = d.getDistance().coerceAtLeast(0.001f)
     val dir = d / rawDist
-    val dist = rawDist.coerceIn(1f, UPPER_ARM + FOREARM - 0.05f)
-    val along = (UPPER_ARM * UPPER_ARM - FOREARM * FOREARM + dist * dist) / (2f * dist)
-    val out = sqrt((UPPER_ARM * UPPER_ARM - along * along).coerceAtLeast(0f))
+    val dist = rawDist.coerceIn(1f, first + second - 0.05f)
+    val along = (first * first - second * second + dist * dist) / (2f * dist)
+    val out = sqrt((first * first - along * along).coerceAtLeast(0f))
     var perp = Offset(-dir.y, dir.x)
-    if (perp.y < 0f) perp = -perp
-    return shoulder + dir * along + perp * out
+    if (kneeForward) {
+        if (perp.x < 0f) perp = -perp
+    } else if (perp.y < 0f) {
+        perp = -perp
+    }
+    return root + dir * along + perp * out
 }
 
 private fun rotateVector(v: Offset, angle: Float): Offset {
@@ -396,163 +610,258 @@ private fun rotateVector(v: Offset, angle: Float): Offset {
 /** @param tint quando definido, desenha só a silhueta nessa cor (camadas de contraluz). */
 private fun DrawScope.drawFigure(
     rig: Rig,
+    legs: Legs,
+    body: BodyFrame,
     style: SamuraiStyle,
     c: SamuraiColors,
     tint: Color?,
     hatOn: Boolean,
     cloth: ClothState,
-    phys: FigurePhysics
+    phys: FigurePhysics,
+    eyes: Eyes,
+    hiltInHand: Boolean
 ) {
     val ink = tint ?: c.ink
     val accent = tint ?: c.accent
     val gold = tint ?: c.gold
     val details = tint == null
-    val flutter = rig.wind * 3f + sin(rig.time * 4.3f) * 1.1f
+    val flutter = (rig.wind * 3f + sin(rig.time * 4.3f) * 1.1f) * (1f - rig.limp * 0.7f)
     val hipY = rig.hipY
     val sy = rig.shoulderY
 
-    // Asas de corvo do Tengu, atrás do corpo, batendo devagar
-    if (style == SamuraiStyle.TENGU) drawWings(rig, ink, c.detail, details)
+    withBody(body) {
+        // Asas de corvo do Tengu, atrás do corpo, batendo devagar
+        if (style == SamuraiStyle.TENGU) drawWings(rig, ink, c.detail, details)
 
-    // Manga e braço de trás
-    drawSleeve(rig.backShoulder, rig.backElbow, flutter, cloth.backSleeve, ink, ragged = style == SamuraiStyle.RONIN)
-    drawArm(rig.backShoulder, rig.backElbow, rig.backHand, ink)
+        // Manga e braço de trás
+        drawSleeve(rig.backShoulder, rig.backElbow, flutter, cloth.backSleeve, ink, ragged = style == SamuraiStyle.RONIN)
+        drawArm(rig.backShoulder, rig.backElbow, rig.backHand, ink, c.detail, details, open = rig.limp)
 
-    // Bainha na cintura, com o cordão (sageo)
-    drawLine(ink, rig.sayaMouth, rig.sayaEnd, strokeWidth = 4.6f, cap = StrokeCap.Round)
-    if (details) {
-        val along = normalize(rig.sayaEnd - rig.sayaMouth)
-        drawLine(c.detail, rig.sayaEnd - along * 4f + Offset(0f, -2f), rig.sayaEnd - along * 4f + Offset(0f, 2f), strokeWidth = 1f)
-        drawLine(accent, rig.sayaMouth + along * 3f + Offset(0f, -2.2f), rig.sayaMouth + along * 3f + Offset(0f, 2.2f), strokeWidth = 1.2f)
-        val cord = Path().apply {
-            moveTo(rig.sayaMouth + along * 6f)
-            cubicTo(
-                rig.sayaMouth + along * 8f + Offset(0f, 8f),
-                rig.sayaMouth + along * 14f + Offset(flutter, 12f),
-                rig.sayaMouth + along * 16f + Offset(flutter * 1.5f, 8f)
-            )
-        }
-        drawPath(cord, c.detail, style = Stroke(width = 1f, cap = StrokeCap.Round))
-    }
-
-    // Hakama (calça larga), com a barra de trás balançando no vento
-    val ff = rig.frontFoot
-    val bf = rig.backFoot
-    val crotch = Offset(2f + 3f * rig.l, hipY + (0f - hipY) * 0.64f)
-    val hakama = Path().apply {
-        moveTo(-14f, hipY)
-        lineTo(14f, hipY)
-        cubicTo(20f, hipY + 20f, ff + 4f, -24f, ff + 12f + rig.wind * 2f, 0f)
-        lineTo(ff - 15f, 0f)
-        cubicTo(ff - 15f, -7f, crotch.x + 4f, crotch.y + 3f, crotch.x, crotch.y)
-        cubicTo(crotch.x - 4f, crotch.y + 3f, bf + 15f, -7f, bf + 15f, 0f)
-        lineTo(bf - 12f + flutter * 1.4f + cloth.hem.x * 1.6f, cloth.hem.y * 0.3f)
-        cubicTo(bf - 9f, -24f, -21f, hipY + 18f, -14f, hipY)
-        close()
-    }
-    drawPath(hakama, ink)
-    if (details) {
-        // Pregas
-        drawLine(c.detail, Offset(6f, hipY + 4f), Offset(ff + 2f, -3f), strokeWidth = 1f)
-        drawLine(c.detail, Offset(-1f, hipY + 4f), Offset(crotch.x + 1f, crotch.y - 2f), strokeWidth = 1f)
-        drawLine(c.detail, Offset(-8f, hipY + 4f), Offset(bf - 2f + flutter, -3f), strokeWidth = 1f)
-    }
-
-    // Casaco haori do mestre
-    if (style == SamuraiStyle.MASTER) {
-        val haori = Path().apply {
-            moveTo(rig.backShoulder.x - 2f, sy + 4f)
-            cubicTo(-22f, hipY - 6f, -26f - flutter, hipY + 14f, -22f - flutter, hipY + 24f)
-            lineTo(16f + rig.lean * 0.4f, hipY + 21f)
-            cubicTo(18f + rig.lean * 0.4f, hipY + 6f, rig.frontShoulder.x + 5f, sy + 14f, rig.frontShoulder.x + 3f, sy + 5f)
-            close()
-        }
-        drawPath(haori, ink)
-        if (details) drawLine(c.detail, Offset(rig.head.x - 1f, sy + 2f), Offset(4f + rig.lean * 0.3f, hipY + 20f), strokeWidth = 1.1f)
-    }
-
-    // Tronco (kimono)
-    val fs = rig.frontShoulder
-    val bs = rig.backShoulder
-    val torso = Path().apply {
-        moveTo(-14f, hipY + 2f)
-        lineTo(14f, hipY + 2f)
-        cubicTo(16f + rig.lean * 0.5f, hipY - 10f, fs.x + 5f, sy + 12f, fs.x + 2f, sy + 1f)
-        cubicTo(fs.x - 2f, sy - 3f, rig.head.x + 4f, sy - 3f, rig.head.x + 1f, sy - 2f)
-        cubicTo(rig.head.x - 4f, sy - 3f, bs.x + 2f, sy - 3f, bs.x - 2f, sy + 1f)
-        cubicTo(bs.x - 6f, sy + 10f, -18f, hipY - 8f, -14f, hipY + 2f)
-        close()
-    }
-    drawPath(torso, ink)
-    if (details) {
-        // Gola cruzada do kimono
-        val v = Offset(2f + rig.lean * 0.6f, sy + 15f)
-        drawLine(c.detail, Offset(rig.head.x - 3f, sy - 1f), v, strokeWidth = 1.3f)
-        drawLine(c.detail, Offset(rig.head.x + 4f, sy - 1f), v, strokeWidth = 1.3f)
-    }
-
-    // Faixa (obi) e as pontas do laço nas costas
-    val obi = Path().apply {
-        moveTo(-15f, hipY - 3f)
-        lineTo(15f, hipY - 4f)
-        lineTo(15f, hipY + 3f)
-        lineTo(-15f, hipY + 3.5f)
-        close()
-    }
-    drawPath(obi, accent)
-    phys.existing(KNOT_A)?.let { drawChain(it, accent, 2.3f) }
-    phys.existing(KNOT_B)?.let { drawChain(it, accent, 2f) }
-
-    // Armadura do Oni e do Kage: ombreiras e saiote de placas
-    if (style == SamuraiStyle.ONI || style == SamuraiStyle.KAGE) {
-        drawArmorPlate(bs, ink, c.detail, gold, details)
-        val skirt = Path().apply {
-            moveTo(-16f, hipY + 2f)
-            lineTo(16f, hipY + 2f)
-            lineTo(20f, hipY + 18f)
-            lineTo(-21f, hipY + 18f)
-            close()
-        }
-        drawPath(skirt, ink)
+        // Bainha na cintura, com o cordão (sageo)
+        drawLine(ink, rig.sayaMouth, rig.sayaEnd, strokeWidth = 4.6f, cap = StrokeCap.Round)
         if (details) {
-            for (i in 1..2) {
-                val y = hipY + 2f + 5.5f * i
-                drawLine(gold, Offset(-17f - i, y), Offset(17f + i, y), strokeWidth = 0.8f)
+            val along = normalize(rig.sayaEnd - rig.sayaMouth)
+            drawLine(c.detail, rig.sayaEnd - along * 4f + Offset(0f, -2f), rig.sayaEnd - along * 4f + Offset(0f, 2f), strokeWidth = 1f)
+            drawLine(accent, rig.sayaMouth + along * 3f + Offset(0f, -2.2f), rig.sayaMouth + along * 3f + Offset(0f, 2.2f), strokeWidth = 1.2f)
+            val cord = Path().apply {
+                moveTo(rig.sayaMouth + along * 6f)
+                cubicTo(
+                    rig.sayaMouth + along * 8f + Offset(0f, 8f),
+                    rig.sayaMouth + along * 14f + Offset(flutter, 12f),
+                    rig.sayaMouth + along * 16f + Offset(flutter * 1.5f, 8f)
+                )
+            }
+            drawPath(cord, c.detail, style = Stroke(width = 1f, cap = StrokeCap.Round))
+        }
+    }
+
+    // Hakama: pernas articuladas, presas ao quadril
+    drawLegs(legs, ink, c.detail, details, flutter, cloth.hem, rig.wind)
+
+    withBody(body) {
+        // Casaco haori do mestre
+        if (style == SamuraiStyle.MASTER) {
+            val haori = Path().apply {
+                moveTo(rig.backShoulder.x - 2f, sy + 4f)
+                cubicTo(-22f, hipY - 6f, -26f - flutter, hipY + 14f, -22f - flutter, hipY + 24f)
+                lineTo(16f + rig.lean * 0.4f, hipY + 21f)
+                cubicTo(18f + rig.lean * 0.4f, hipY + 6f, rig.frontShoulder.x + 5f, sy + 14f, rig.frontShoulder.x + 3f, sy + 5f)
+                close()
+            }
+            drawPath(haori, ink)
+            if (details) drawLine(c.detail, Offset(rig.head.x - 1f, sy + 2f), Offset(4f + rig.lean * 0.3f, hipY + 20f), strokeWidth = 1.1f)
+        }
+
+        // Tronco (kimono)
+        val fs = rig.frontShoulder
+        val bs = rig.backShoulder
+        val torso = Path().apply {
+            moveTo(-14f, hipY + 2f)
+            lineTo(14f, hipY + 2f)
+            cubicTo(16f + rig.lean * 0.5f, hipY - 10f, fs.x + 5f, sy + 12f, fs.x + 2f, sy + 1f)
+            cubicTo(fs.x - 2f, sy - 3f, rig.head.x + 4f, sy - 3f, rig.head.x + 1f, sy - 2f)
+            cubicTo(rig.head.x - 4f, sy - 3f, bs.x + 2f, sy - 3f, bs.x - 2f, sy + 1f)
+            cubicTo(bs.x - 6f, sy + 10f, -18f, hipY - 8f, -14f, hipY + 2f)
+            close()
+        }
+        drawPath(torso, ink)
+        if (details) {
+            // Gola cruzada do kimono e as dobras do tecido no peito
+            val v = Offset(2f + rig.lean * 0.6f, sy + 15f)
+            drawLine(c.detail, Offset(rig.head.x - 3f, sy - 1f), v, strokeWidth = 1.3f)
+            drawLine(c.detail, Offset(rig.head.x + 4f, sy - 1f), v, strokeWidth = 1.3f)
+            drawLine(c.detail, Offset(fs.x - 1f, sy + 8f), Offset(9f + rig.lean * 0.3f, hipY - 6f), strokeWidth = 0.7f)
+            drawLine(c.detail, Offset(bs.x + 3f, sy + 9f), Offset(-8f + rig.lean * 0.2f, hipY - 5f), strokeWidth = 0.7f)
+        }
+
+        // Faixa (obi) e as pontas do laço nas costas
+        val obi = Path().apply {
+            moveTo(-15f, hipY - 3f)
+            lineTo(15f, hipY - 4f)
+            lineTo(15f, hipY + 3f)
+            lineTo(-15f, hipY + 3.5f)
+            close()
+        }
+        drawPath(obi, accent)
+        if (details) drawLine(c.detail.copy(alpha = 0.5f), Offset(-15f, hipY), Offset(15f, hipY - 0.5f), strokeWidth = 0.6f)
+        phys.existing(KNOT_A)?.let { drawChain(it, accent, 2.3f) }
+        phys.existing(KNOT_B)?.let { drawChain(it, accent, 2f) }
+
+        // Armadura do Oni e do Kage: ombreiras e saiote de placas
+        if (style == SamuraiStyle.ONI || style == SamuraiStyle.KAGE) {
+            drawArmorPlate(bs, ink, c.detail, gold, details)
+            val skirt = Path().apply {
+                moveTo(-16f, hipY + 2f)
+                lineTo(16f, hipY + 2f)
+                lineTo(20f, hipY + 18f)
+                lineTo(-21f, hipY + 18f)
+                close()
+            }
+            drawPath(skirt, ink)
+            if (details) {
+                for (i in 1..2) {
+                    val y = hipY + 2f + 5.5f * i
+                    drawLine(gold, Offset(-17f - i, y), Offset(17f + i, y), strokeWidth = 0.8f)
+                }
+                for (i in -1..1) drawLine(c.detail, Offset(i * 9f, hipY + 3f), Offset(i * 10.5f, hipY + 17f), strokeWidth = 0.6f)
             }
         }
-    }
 
-    // Cachecol do Kage tremulando para trás
-    if (style == SamuraiStyle.KAGE) phys.existing(SCARF)?.let { drawTaperedChain(it, ink, baseWidth = 2.6f) }
+        // Cachecol do Kage tremulando para trás
+        if (style == SamuraiStyle.KAGE) phys.existing(SCARF)?.let { drawTaperedChain(it, ink, baseWidth = 2.6f) }
 
-    // Cabo da espada (tsuka) com a guarda (tsuba)
-    drawLine(ink, rig.tsuba, rig.pommel, strokeWidth = 4.2f, cap = StrokeCap.Round)
-    drawCircle(ink, radius = 3.3f, center = rig.tsuba)
-    if (details) {
-        val axis = normalize(rig.pommel - rig.tsuba)
-        val side = Offset(-axis.y, axis.x)
-        for (i in 1..3) {
-            val p = rig.tsuba + axis * (3.5f * i + 1f)
-            drawLine(c.detail, p - side * 1.6f + axis * 1.2f, p + side * 1.6f - axis * 1.2f, strokeWidth = 0.7f)
-            drawLine(c.detail, p - side * 1.6f - axis * 1.2f, p + side * 1.6f + axis * 1.2f, strokeWidth = 0.7f)
+        // Cabo da espada (tsuka) com a guarda (tsuba)
+        if (hiltInHand) {
+            drawLine(ink, rig.tsuba, rig.pommel, strokeWidth = 4.2f, cap = StrokeCap.Round)
+            drawCircle(ink, radius = 3.3f, center = rig.tsuba)
+            if (details) {
+                val axis = normalize(rig.pommel - rig.tsuba)
+                val side = Offset(-axis.y, axis.x)
+                for (i in 1..3) {
+                    val p = rig.tsuba + axis * (3.5f * i + 1f)
+                    drawLine(c.detail, p - side * 1.6f + axis * 1.2f, p + side * 1.6f - axis * 1.2f, strokeWidth = 0.7f)
+                    drawLine(c.detail, p - side * 1.6f - axis * 1.2f, p + side * 1.6f + axis * 1.2f, strokeWidth = 0.7f)
+                }
+                drawCircle(gold, radius = 1.2f, center = rig.pommel)
+                drawCircle(gold, radius = 3.3f, center = rig.tsuba, style = Stroke(width = 0.8f))
+            }
         }
-        drawCircle(gold, radius = 3.3f, center = rig.tsuba, style = Stroke(width = 0.8f))
+
+        // Cabeça e pescoço
+        drawLine(ink, Offset(rig.head.x - 1f, sy), rig.head + Offset(-1f, 4f), strokeWidth = 6.4f, cap = StrokeCap.Round)
+        drawHead(rig, style, ink, accent, gold, c, details, hatOn, phys, eyes)
+
+        // Manga e braço da frente por cima de tudo
+        if (style == SamuraiStyle.ONI || style == SamuraiStyle.KAGE) drawArmorPlate(fs, ink, c.detail, gold, details)
+        drawSleeve(fs, rig.frontElbow, flutter, cloth.frontSleeve, ink, ragged = style == SamuraiStyle.RONIN)
+        drawArm(fs, rig.frontElbow, rig.frontHand, ink, c.detail, details, open = if (hiltInHand && rig.bladeVisible) 0f else rig.limp)
     }
-
-    // Cabeça e pescoço
-    drawLine(ink, Offset(rig.head.x - 1f, sy), rig.head + Offset(-1f, 4f), strokeWidth = 6.4f, cap = StrokeCap.Round)
-    drawHead(rig, style, ink, accent, gold, c, details, hatOn, phys)
-
-    // Manga e braço da frente por cima de tudo
-    if (style == SamuraiStyle.ONI || style == SamuraiStyle.KAGE) drawArmorPlate(fs, ink, c.detail, gold, details)
-    drawSleeve(fs, rig.frontElbow, flutter, cloth.frontSleeve, ink, ragged = style == SamuraiStyle.RONIN)
-    drawArm(fs, rig.frontElbow, rig.frontHand, ink)
 }
 
-private fun DrawScope.drawArm(shoulder: Offset, elbow: Offset, hand: Offset, ink: Color) {
+/** Hakama larga: cada perna segue coxa e canela, com a barra abrindo em sino. */
+private fun DrawScope.drawLegs(
+    legs: Legs,
+    ink: Color,
+    detail: Color,
+    details: Boolean,
+    flutter: Float,
+    hem: Offset,
+    wind: Float
+) {
+    // Pés com sandália (waraji), por baixo da barra
+    drawFoot(legs.backKnee, legs.backAnkle, ink)
+    drawFoot(legs.frontKnee, legs.frontAnkle, ink)
+
+    val backFlare = Offset(flutter * 1.4f + hem.x * 1.6f, hem.y * 0.3f)
+    val frontFlare = Offset(wind * 2f, 0f)
+    drawPath(hakamaLeg(legs.backHip, legs.backKnee, legs.backAnkle, backFlare), ink)
+    drawPath(hakamaLeg(legs.frontHip, legs.frontKnee, legs.frontAnkle, frontFlare), ink)
+
+    // Parte de cima, inteira como uma saia, até perto dos joelhos
+    val waist = Path().apply {
+        moveTo(legs.waistBack)
+        lineTo(legs.waistFront)
+        lineTo(lerp(legs.frontHip, legs.frontKnee, 0.72f))
+        lineTo(lerp(legs.backHip, legs.backKnee, 0.72f))
+        close()
+    }
+    drawPath(waist, ink)
+
+    if (details) {
+        // Pregas que descem pelas pernas
+        for ((hip, knee, ankle) in listOf(
+            Triple(legs.frontHip, legs.frontKnee, legs.frontAnkle),
+            Triple(legs.backHip, legs.backKnee, legs.backAnkle)
+        )) {
+            val n = perpendicular(normalize(knee - hip))
+            val m = perpendicular(normalize(ankle - knee))
+            drawLine(detail.copy(alpha = 0.7f), hip + n * 2.5f, knee + n * 3f, strokeWidth = 0.7f)
+            drawLine(detail.copy(alpha = 0.7f), knee + n * 3f, ankle + m * 5f, strokeWidth = 0.7f)
+        }
+    }
+}
+
+private fun hakamaLeg(hip: Offset, knee: Offset, ankle: Offset, flare: Offset): Path {
+    val t = normalize(knee - hip)
+    val s = normalize(ankle - knee)
+    val n = perpendicular(t)
+    val m = perpendicular(s)
+    val kneeNormal = normalize(n + m)
+    val hemCenter = ankle + s * 1.5f + flare
+    val hipOut = hip + n * 8.5f
+    val hipIn = hip - n * 8.5f
+    val kneeOut = knee + kneeNormal * 8.5f
+    val kneeIn = knee - kneeNormal * 8.5f
+    val hemOut = hemCenter + m * 11f
+    val hemIn = hemCenter - m * 11f
+    return Path().apply {
+        moveTo(hipOut)
+        // Linhas levemente curvas: o tecido se acomoda em volta do joelho
+        cubicTo(lerp(hipOut, kneeOut, 0.4f), lerp(hipOut, kneeOut, 0.8f), kneeOut)
+        cubicTo(lerp(kneeOut, hemOut, 0.35f) + m * 1f, lerp(kneeOut, hemOut, 0.75f) + m * 2f, hemOut)
+        lineTo(hemIn)
+        cubicTo(lerp(hemIn, kneeIn, 0.25f) - m * 1f, lerp(hemIn, kneeIn, 0.65f), kneeIn)
+        cubicTo(lerp(kneeIn, hipIn, 0.2f), lerp(kneeIn, hipIn, 0.6f), hipIn)
+        close()
+    }
+}
+
+/** Pé com sandália, apontando para a frente da canela. */
+private fun DrawScope.drawFoot(knee: Offset, ankle: Offset, ink: Color) {
+    val s = normalize(ankle - knee)
+    val forward = Offset(s.y, -s.x)
+    drawLine(ink, ankle + s * 1f - forward * 2f, ankle + s * 1f + forward * 7.5f, strokeWidth = 4.2f, cap = StrokeCap.Round)
+}
+
+/**
+ * Braço com a mão: fechada no cabo, com os dedos marcados, ou aberta e solta
+ * quando o personagem morre.
+ */
+private fun DrawScope.drawArm(
+    shoulder: Offset,
+    elbow: Offset,
+    hand: Offset,
+    ink: Color,
+    detail: Color,
+    details: Boolean,
+    open: Float
+) {
     drawLine(ink, shoulder, elbow, strokeWidth = 6.8f, cap = StrokeCap.Round)
     drawLine(ink, elbow, hand, strokeWidth = 5.8f, cap = StrokeCap.Round)
-    drawCircle(ink, radius = 3.3f, center = hand)
+    drawCircle(ink, radius = 3.4f, center = hand)
+    val f = normalize(hand - elbow)
+    val side = perpendicular(f)
+    if (open > 0.5f) {
+        for (i in -1..1) {
+            drawLine(ink, hand, hand + f * 4.4f + side * (i * 1.5f), strokeWidth = 1.3f, cap = StrokeCap.Round)
+        }
+        drawLine(ink, hand, hand + side * 3.2f - f * 0.5f, strokeWidth = 1.2f, cap = StrokeCap.Round)
+    } else if (details) {
+        for (i in 0..2) {
+            val p = hand + f * 0.8f + side * (-1.7f + 1.7f * i)
+            drawLine(detail, p, p + f * 1.8f, strokeWidth = 0.55f)
+        }
+    }
 }
 
 /** Manga larga do kimono, pendurada no braço e balançando. */
@@ -611,7 +920,8 @@ private fun DrawScope.drawHead(
     c: SamuraiColors,
     details: Boolean,
     hatOn: Boolean,
-    phys: FigurePhysics
+    phys: FigurePhysics,
+    eyes: Eyes
 ) {
     val h = rig.head
     val flutter = rig.wind * 3f + sin(rig.time * 5.1f) * 1.4f
@@ -627,6 +937,10 @@ private fun DrawScope.drawHead(
         close()
     }
     drawPath(face, ink)
+
+    // Olhos: um brilho fino que dá vida à silhueta (foco no golpe, susto no corte, fechados ao morrer)
+    val hasEyes = style != SamuraiStyle.ONI && style != SamuraiStyle.KAGE
+    if (details && hasEyes) drawEye(h + Offset(3.5f, -1.4f), eyes, lerpColor(c.rim, Color.White, 0.45f))
 
     when (style) {
         SamuraiStyle.PLAYER -> {
@@ -713,7 +1027,7 @@ private fun DrawScope.drawHead(
             }
             drawPath(horns, gold, style = Stroke(width = 2f, cap = StrokeCap.Round))
             if (details) {
-                drawCircle(Iai.ShuBright, radius = 1f, center = Offset(h.x + 4.6f, h.y - 0.4f))
+                if (eyes != Eyes.CLOSED) drawCircle(Iai.ShuBright, radius = 1f, center = Offset(h.x + 4.6f, h.y - 0.4f))
                 drawLine(gold, Offset(h.x - 8.5f, h.y - 0.6f), Offset(h.x + 9f, h.y - 1.6f), strokeWidth = 0.8f)
             }
         }
@@ -764,7 +1078,7 @@ private fun DrawScope.drawHead(
                 close()
             }
             drawPath(hood, ink)
-            if (details) {
+            if (details && eyes != Eyes.CLOSED) {
                 val glow = 0.6f + 0.4f * sin(rig.time * 3.2f)
                 drawLine(accent.copy(alpha = glow), Offset(h.x + 2.5f, h.y - 1.2f), Offset(h.x + 6.2f, h.y - 1.6f), strokeWidth = 1.2f, cap = StrokeCap.Round)
             }
@@ -814,6 +1128,19 @@ private fun DrawScope.drawWings(rig: Rig, ink: Color, detail: Color, details: Bo
                 drawLine(detail, base + Offset(-4f, 2f), Offset(mix(base.x, tip.x, k + 0.2f), mix(base.y, tip.y, k) + 10f), strokeWidth = 0.7f)
             }
         }
+    }
+}
+
+private fun DrawScope.drawEye(e: Offset, eyes: Eyes, color: Color) {
+    when (eyes) {
+        Eyes.OPEN -> drawLine(color, e, e + Offset(2.2f, 0.2f), strokeWidth = 1.1f, cap = StrokeCap.Round)
+        Eyes.FOCUS -> {
+            drawLine(color, e + Offset(0f, 0.3f), e + Offset(2.4f, 0f), strokeWidth = 0.8f, cap = StrokeCap.Round)
+            // Sobrancelha franzida
+            drawLine(color.copy(alpha = 0.55f), e + Offset(-0.4f, -2.4f), e + Offset(2.6f, -1.3f), strokeWidth = 0.8f, cap = StrokeCap.Round)
+        }
+        Eyes.SHOCK -> drawCircle(color, radius = 1.05f, center = e + Offset(1.1f, 0f))
+        Eyes.CLOSED -> drawLine(color.copy(alpha = 0.35f), e + Offset(0f, 0.7f), e + Offset(2.2f, 1.1f), strokeWidth = 0.7f, cap = StrokeCap.Round)
     }
 }
 
@@ -923,7 +1250,10 @@ private fun DrawScope.drawCutSpray(rig: Rig, style: SamuraiStyle, fall: Float) {
 }
 
 /** Lâmina curva de aço e o rastro brilhante do corte horizontal. */
-private fun DrawScope.drawBlade(rig: Rig, c: SamuraiColors, trail: Float) {
+private fun DrawScope.drawBlade(rig: Rig, c: SamuraiColors, trail: Float, ms: Float) {
+    // Koiguchi: o polegar empurra a guarda para soltar a espada e ela reluz
+    if (ms in 10f..110f) drawGlint(rig.tsuba, 5f * sin(PI_F * (ms - 10f) / 100f), c.trail)
+
     if (!rig.bladeVisible) {
         // Lâmina começando a sair da bainha
         if (rig.draw > 0.02f) {
@@ -953,38 +1283,221 @@ private fun DrawScope.drawBlade(rig: Rig, c: SamuraiColors, trail: Float) {
         drawPath(arc, c.trail.copy(alpha = 0.6f * trail))
     }
 
-    val d = rig.bladeDir * 72f
-    val length = d.getDistance()
+    val axis = normalize(rig.bladeDir)
+    drawBladeShape(rig.tsuba, axis, rig.bladeLength, c)
+
+    // Brilho que corre pela lâmina no saque, estrela na ponta no impacto
+    // e um reflexo lento durante o zanshin
+    if (ms in 100f..280f) {
+        val k = (ms - 100f) / 180f
+        drawGlint(rig.tsuba + axis * (rig.bladeLength * k), 4.5f * sin(PI_F * k), Color.White)
+    }
+    if (ms in 170f..340f) {
+        val k = (ms - 170f) / 170f
+        drawGlint(rig.tsuba + axis * rig.bladeLength, 9f * sin(PI_F * k), c.trail)
+    }
+    if (ms in 560f..900f) {
+        val k = (ms - 560f) / 340f
+        drawGlint(rig.tsuba + axis * (rig.bladeLength * k), 3.2f * sin(PI_F * k), Color.White)
+    }
+}
+
+/** A lâmina em si: aço curvo com o fio claro no dorso. */
+private fun DrawScope.drawBladeShape(tsuba: Offset, axis: Offset, length: Float, c: SamuraiColors) {
     if (length < 1f) return
-    val u = d / length
-    var spine = Offset(-u.y, u.x)
+    val d = axis * length
+    var spine = perpendicular(axis)
     if (spine.y > 0f) spine = -spine
-    val tip = rig.tsuba + d
+    val tip = tsuba + d
     val curve = length * 0.06f
     val blade = Path().apply {
-        moveTo(rig.tsuba + spine * 1.5f)
-        cubicTo(
-            rig.tsuba + d * 0.35f + spine * (curve + 1.3f),
-            rig.tsuba + d * 0.75f + spine * (curve + 0.8f),
-            tip
-        )
-        cubicTo(
-            rig.tsuba + d * 0.75f + spine * (curve - 1f),
-            rig.tsuba + d * 0.35f + spine * (curve - 1.4f),
-            rig.tsuba - spine * 1.3f
-        )
+        moveTo(tsuba + spine * 1.5f)
+        cubicTo(tsuba + d * 0.35f + spine * (curve + 1.3f), tsuba + d * 0.75f + spine * (curve + 0.8f), tip)
+        cubicTo(tsuba + d * 0.75f + spine * (curve - 1f), tsuba + d * 0.35f + spine * (curve - 1.4f), tsuba - spine * 1.3f)
         close()
     }
     drawPath(blade, c.steel)
     val spineLine = Path().apply {
-        moveTo(rig.tsuba + spine * 1.4f)
-        cubicTo(
-            rig.tsuba + d * 0.35f + spine * (curve + 1.2f),
-            rig.tsuba + d * 0.75f + spine * (curve + 0.7f),
-            tip
-        )
+        moveTo(tsuba + spine * 1.4f)
+        cubicTo(tsuba + d * 0.35f + spine * (curve + 1.2f), tsuba + d * 0.75f + spine * (curve + 0.7f), tip)
     }
     drawPath(spineLine, c.steelEdge, style = Stroke(width = 0.8f, cap = StrokeCap.Round))
+    // Habaki: a peça dourada logo depois da guarda
+    drawLine(c.gold, tsuba + axis * 0.5f, tsuba + axis * 3.5f, strokeWidth = 2.6f)
+}
+
+/** Estrela de brilho de quatro pontas. */
+private fun DrawScope.drawGlint(center: Offset, size: Float, color: Color) {
+    if (size <= 0.2f) return
+    drawCircle(color.copy(alpha = 0.25f), radius = size * 0.75f, center = center)
+    drawLine(color.copy(alpha = 0.95f), center - Offset(size, 0f), center + Offset(size, 0f), strokeWidth = 0.9f, cap = StrokeCap.Round)
+    drawLine(color.copy(alpha = 0.95f), center - Offset(0f, size), center + Offset(0f, size), strokeWidth = 0.9f, cap = StrokeCap.Round)
+    val d = size * 0.4f
+    drawLine(color.copy(alpha = 0.6f), center - Offset(d, d), center + Offset(d, d), strokeWidth = 0.6f, cap = StrokeCap.Round)
+    drawLine(color.copy(alpha = 0.6f), center - Offset(d, -d), center + Offset(d, -d), strokeWidth = 0.6f, cap = StrokeCap.Round)
+    drawCircle(Color.White, radius = size * 0.2f, center = center)
+}
+
+/**
+ * A espada que escapa da mão no tranco do corte: sobe um pouco girando, cai,
+ * quica uma vez e fica deitada no chão. Calculada direto do tempo da queda
+ * (sem estado), então funciona igual na cena e nas prévias.
+ */
+private fun DrawScope.drawDroppedSword(rig: Rig, c: SamuraiColors, fall: Float) {
+    val t = (fall - DEATH_DROP_AT) * DEATH_DURATION_S
+    if (t < 0f) return
+    val axis0 = rig.gripAxis
+    val angle0 = atan2(axis0.y, axis0.x)
+    val center0 = rig.gripTsuba + axis0 * 29f
+    val vx = -26f
+    val vy = -150f
+    val spin = -9f
+    val g = 900f
+    val rest = -2.6f
+    val disc = (vy * vy - 2f * g * (center0.y - rest)).coerceAtLeast(0f)
+    val landAt = (-vy + sqrt(disc)) / g
+
+    val center: Offset
+    val angle: Float
+    if (t < landAt) {
+        center = center0 + Offset(vx * t, vy * t + 0.5f * g * t * t)
+        angle = angle0 + spin * t
+    } else {
+        val tb = t - landAt
+        val bounce = (vy + g * landAt) * 0.24f
+        val hop = (bounce * tb - 0.5f * g * tb * tb).coerceAtLeast(0f)
+        center = Offset(center0.x + vx * landAt + vx * 0.4f * minOf(tb, 0.45f), rest - hop)
+        val impact = angle0 + spin * landAt
+        val flat = kotlin.math.round(impact / PI_F) * PI_F
+        angle = mix(impact, flat, easeOutCubic(tb / 0.3f))
+    }
+    val axis = Offset(cos(angle), sin(angle))
+    val tsuba = center - axis * 29f
+    drawBladeShape(tsuba, axis, 72f, c)
+    drawLine(c.ink, tsuba, tsuba - axis * 14f, strokeWidth = 4.2f, cap = StrokeCap.Round)
+    drawCircle(c.ink, radius = 3.3f, center = tsuba)
+    drawCircle(c.gold, radius = 3.3f, center = tsuba, style = Stroke(width = 0.8f))
+}
+
+/** Nuvem de poeira quando o corpo bate no chão. */
+private fun DrawScope.drawDust(x: Float, landed: Float, heavy: Boolean, c: SamuraiColors) {
+    if (landed <= 0f || landed >= 1f) return
+    val e = easeOutCubic(landed)
+    val big = if (heavy) 1.4f else 1f
+    val color = lerpColor(c.ink, c.rim, 0.45f)
+    for (i in 0 until 12) {
+        val side = if (i % 2 == 0) 1f else -1f
+        val spread = (12f + 38f * hash(i + 3)) * big
+        val pos = Offset(x + side * spread * e + (hash(i + 9) - 0.5f) * 12f, -2f - (4f + 12f * hash(i + 13)) * e)
+        val r = (3f + 7f * e) * (0.7f + 0.6f * hash(i + 21)) * big
+        drawCircle(color.copy(alpha = 0.34f * (1f - landed)), radius = r, center = pos)
+    }
+}
+
+/** Kage se desfaz em fumaça escura que sobe, com um brilho violeta por dentro. */
+private fun DrawScope.drawSmoke(points: List<Offset>, fall: Float, c: SamuraiColors, time: Float) {
+    for (i in 0 until 34) {
+        val p = (fall - 0.5f - hash(i + 101) * 0.15f) / 0.33f
+        if (p <= 0f || p >= 1f) continue
+        val origin = lerp(points[i % points.size], points[(i + 1) % points.size], hash(i + 5))
+        val pos = origin + Offset(sin(time * 1.7f + i) * 6f * p - 20f * p * hash(i + 7), -70f * easeOutCubic(p))
+        val r = 5f + 14f * p * (0.6f + 0.8f * hash(i + 11))
+        val a = 0.5f * (1f - p) * minOf(1f, p * 6f)
+        // Bordas suaves: três círculos sobrepostos, mais claros por fora
+        drawCircle(c.ink.copy(alpha = a * 0.3f), radius = r, center = pos)
+        drawCircle(c.ink.copy(alpha = a * 0.45f), radius = r * 0.72f, center = pos)
+        drawCircle(c.ink.copy(alpha = a * 0.6f), radius = r * 0.45f, center = pos)
+        drawCircle(c.accent.copy(alpha = a * 0.35f), radius = r * 0.3f, center = pos + Offset(0f, -r * 0.15f))
+    }
+}
+
+/** Yuki vira neve: flocos que explodem do corpo e o vento leva. */
+private fun DrawScope.drawSnowBurst(points: List<Offset>, fall: Float) {
+    for (i in 0 until 34) {
+        val p = (fall - 0.5f - hash(i + 201) * 0.12f) / 0.36f
+        if (p <= 0f || p >= 1f) continue
+        val origin = lerp(points[i % points.size], points[(i + 2) % points.size], hash(i + 3))
+        val angle = hash(i + 17) * 2f * PI_F
+        val speed = 26f + 44f * hash(i + 29)
+        val pos = origin + Offset(cos(angle), sin(angle)) * (speed * easeOutCubic(p)) + Offset(-30f * p, -24f * p)
+        val a = (1f - p) * minOf(1f, p * 8f)
+        val color = if (i % 3 == 0) Iai.Ice else Color.White
+        drawCircle(color.copy(alpha = a), radius = 1.2f + 1.4f * hash(i + 41), center = pos)
+    }
+}
+
+/** Tengu explode em penas negras que rodopiam até o chão. */
+private fun DrawScope.drawFeathers(points: List<Offset>, fall: Float, c: SamuraiColors) {
+    for (i in 0 until 22) {
+        val p = (fall - 0.44f - hash(i + 301) * 0.1f) / 0.44f
+        if (p <= 0f || p >= 1f) continue
+        val origin = lerp(points[i % points.size], points[(i + 1) % points.size], hash(i + 7))
+        val angle = -PI_F * (0.1f + 0.8f * hash(i + 19))
+        val burst = (24f + 34f * hash(i + 23)) * easeOutCubic(p)
+        val pos = origin + Offset(cos(angle), sin(angle)) * burst +
+            Offset(sin(p * 9f + i) * 5f, 52f * p * p)
+        val spin = (hash(i + 31) - 0.5f) * 720f * p + i * 40f
+        val a = 1f - easeInCubic(p)
+        rotate(degrees = spin, pivot = pos) {
+            val feather = Path().apply {
+                moveTo(pos.x - 6.5f, pos.y)
+                cubicTo(pos.x - 2.5f, pos.y - 3.2f, pos.x + 3f, pos.y - 2.6f, pos.x + 7f, pos.y)
+                cubicTo(pos.x + 3f, pos.y + 2.6f, pos.x - 2.5f, pos.y + 3.2f, pos.x - 6.5f, pos.y)
+                close()
+            }
+            drawPath(feather, c.ink.copy(alpha = a))
+            drawLine(c.rim.copy(alpha = 0.7f * a), Offset(pos.x - 8f, pos.y), Offset(pos.x + 7f, pos.y), strokeWidth = 0.7f)
+        }
+    }
+}
+
+/** Rachaduras douradas brilhando na armadura do Oni depois do corte. */
+private fun DrawScope.drawArmorCracks(rig: Rig, c: SamuraiColors, fall: Float) {
+    val glow = 0.25f + 0.75f * (1f - easeInOut((fall - 0.05f) / 0.6f))
+    val fs = rig.frontShoulder
+    val sy = rig.shoulderY
+    val crack = Path().apply {
+        moveTo(fs.x - 1f, sy + 5f)
+        lineTo(fs.x - 6f, sy + 12f)
+        lineTo(fs.x - 3f, sy + 17f)
+        lineTo(fs.x - 10f, sy + 25f)
+        lineTo(fs.x - 8f, sy + 31f)
+        moveTo(fs.x - 6f, sy + 12f)
+        lineTo(fs.x - 13f, sy + 15f)
+        moveTo(fs.x - 3f, sy + 17f)
+        lineTo(fs.x + 3f, sy + 22f)
+    }
+    drawPath(crack, c.gold.copy(alpha = 0.35f * glow), style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    drawPath(crack, c.gold.copy(alpha = glow), style = Stroke(width = 1f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+}
+
+/** Pedaços da armadura do Oni que se soltam e caem no chão. */
+private fun DrawScope.drawArmorDebris(rig: Rig, fall: Float, c: SamuraiColors) {
+    val t = (fall - 0.05f) * DEATH_DURATION_S
+    if (t <= 0f) return
+    val starts = listOf(rig.frontShoulder + Offset(2f, 6f), rig.backShoulder + Offset(-2f, 4f), Offset(6f, rig.hipY + 12f))
+    val velocities = listOf(Offset(55f, -190f), Offset(-40f, -230f), Offset(30f, -140f))
+    val g = 900f
+    for (i in starts.indices) {
+        val p0 = starts[i]
+        val v = velocities[i]
+        val disc = (v.y * v.y - 2f * g * (p0.y + 2f)).coerceAtLeast(0f)
+        val landAt = (-v.y + sqrt(disc)) / g
+        val tt = minOf(t, landAt)
+        val pos = Offset(p0.x + v.x * tt, p0.y + v.y * tt + 0.5f * g * tt * tt)
+        val spin = tt * (300f + 200f * i)
+        rotate(degrees = spin, pivot = pos) {
+            val plate = Path().apply {
+                moveTo(pos.x - 5f, pos.y - 3f)
+                lineTo(pos.x + 5f, pos.y - 2.5f)
+                lineTo(pos.x + 4f, pos.y + 3f)
+                lineTo(pos.x - 4.5f, pos.y + 3.5f)
+                close()
+            }
+            drawPath(plate, c.ink)
+            drawLine(c.gold, Offset(pos.x - 4.5f, pos.y), Offset(pos.x + 4.5f, pos.y - 0.3f), strokeWidth = 0.7f)
+        }
+    }
 }
 
 /**
@@ -1103,6 +1616,8 @@ private fun normalize(v: Offset): Offset {
     val len = v.getDistance()
     return if (len < 0.0001f) Offset(1f, 0f) else v / len
 }
+
+private fun perpendicular(v: Offset): Offset = Offset(-v.y, v.x)
 
 /** Número pseudoaleatório estável (0..1) a partir de um índice. */
 private fun hash(i: Int): Float {

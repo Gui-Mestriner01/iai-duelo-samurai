@@ -339,7 +339,7 @@ class HordeViewModel(
 
     companion object {
         private const val BANNER_MS = 1_900L
-        private const val RESULT_MS = 1_900L
+        private const val RESULT_MS = 2_700L
 
         val Factory = iaiFactory { container ->
             HordeViewModel(
