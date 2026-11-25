@@ -2,8 +2,10 @@ package com.gui.iai.core
 
 import android.content.Context
 import com.gui.iai.audio.ClapDetector
+import com.gui.iai.audio.CutVoices
 import com.gui.iai.audio.SoundEngine
 import com.gui.iai.data.iaiDataStore
+import com.gui.iai.data.progress.ProgressRepository
 import com.gui.iai.data.settings.SettingsRepository
 import com.gui.iai.data.stats.StatsRepository
 import com.gui.iai.game.Feedback
@@ -19,6 +21,7 @@ class AppContainer(context: Context) {
 
     val settingsRepository by lazy { SettingsRepository(appContext.iaiDataStore) }
     val statsRepository by lazy { StatsRepository(appContext.iaiDataStore) }
+    val progressRepository by lazy { ProgressRepository(appContext.iaiDataStore) }
 
     val swingDetector by lazy { SwingDetector(appContext) }
     val scabbardSensor by lazy { ScabbardSensor(appContext) }
@@ -26,7 +29,8 @@ class AppContainer(context: Context) {
 
     val soundEngine by lazy { SoundEngine() }
     val haptics by lazy { Haptics(appContext) }
-    val feedback by lazy { Feedback(soundEngine, haptics) }
+    val cutVoices by lazy { CutVoices(appContext) }
+    val feedback by lazy { Feedback(soundEngine, haptics, cutVoices) }
 
     val roundRunner by lazy { RoundRunner(swingDetector, scabbardSensor, clapDetector) }
 }

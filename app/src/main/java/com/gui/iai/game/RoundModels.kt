@@ -14,8 +14,17 @@ enum class RoundPhase {
     /** Silêncio antes do sinal. Mexer agora = precipitado. */
     WAITING,
 
+    /** Sinal falso (finta): parece o sinal, mas cortar agora é cair na armadilha. */
+    FEINT,
+
+    /** 止: proibido cortar enquanto estiver na tela. */
+    HALT,
+
     /** O sinal foi dado: saque! */
-    SIGNAL
+    SIGNAL,
+
+    /** O sinal já sumiu da tela (relâmpago, nevasca), mas ainda dá para cortar. */
+    SIGNAL_FADED
 }
 
 enum class FoulReason {
@@ -23,7 +32,13 @@ enum class FoulReason {
     EARLY_SWING,
 
     /** Tirou a espada da bainha antes do sinal. */
-    EARLY_DRAW
+    EARLY_DRAW,
+
+    /** Cortou no sinal falso. */
+    FEINT,
+
+    /** Cortou com o 止 na tela. */
+    HALT
 }
 
 sealed interface RoundOutcome {
@@ -49,5 +64,11 @@ data class RoundConfig(
     val reactionLimitMs: Long,
     val opponentFoulChance: Float = 0f,
     val minWaitMs: Long = 2_200,
-    val maxWaitMs: Long = 5_800
+    val maxWaitMs: Long = 5_800,
+    /** Quantos sinais falsos podem aparecer antes do verdadeiro. */
+    val feints: Int = 0,
+    /** Se pode aparecer um 止 (proibido cortar) durante a espera. */
+    val halt: Boolean = false,
+    /** Por quanto tempo o sinal fica visível; null = até o fim do golpe. */
+    val signalVisibleMs: Long? = null
 )

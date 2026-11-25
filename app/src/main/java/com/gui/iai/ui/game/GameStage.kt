@@ -130,7 +130,13 @@ fun GameStage(
     /** Bainha por toque: avisa quando há dedo pressionado na tela. */
     onHoldChange: ((Boolean) -> Unit)? = null,
     /** Mostra o selo 鞘 indicando se o polegar está na tela. */
-    holdIndicator: Boolean = false
+    holdIndicator: Boolean = false,
+    /** Sinal falso (finta) na tela. */
+    feintVisible: Boolean = false,
+    /** 止: não corte. */
+    haltVisible: Boolean = false,
+    /** Transparência do sinal (a nevasca deixa ele fraco). */
+    signalAlpha: Float = 1f
 ) {
     var held by remember { mutableStateOf(false) }
     val currentOnHold by rememberUpdatedState(onHoldChange)
@@ -223,15 +229,66 @@ fun GameStage(
             }
         }
 
-        if (signalVisible) SignalMark(Modifier.align(Alignment.Center))
+        if (signalVisible) SignalMark(Modifier.align(Alignment.Center), alpha = signalAlpha)
+        if (feintVisible) FeintMark(Modifier.align(Alignment.Center))
+        if (haltVisible) HaltMark(Modifier.align(Alignment.Center))
 
         overlay()
     }
 }
 
+/** O sinal falso: um "!" cinzento e torto, que treme. Cortar nele é cair na finta. */
+@Composable
+fun FeintMark(modifier: Modifier = Modifier) {
+    val shake = rememberInfiniteTransition(label = "feint")
+    val angle by shake.animateFloat(
+        initialValue = -9f,
+        targetValue = 7f,
+        animationSpec = infiniteRepeatable(tween(70), RepeatMode.Reverse),
+        label = "feintShake"
+    )
+    Text(
+        text = "!",
+        fontFamily = BrushFont,
+        fontSize = 200.sp,
+        lineHeight = 200.sp,
+        color = Iai.SumiFaded.copy(alpha = 0.75f),
+        modifier = modifier.graphicsLayer { rotationZ = angle }
+    )
+}
+
+/** 止 dentro de um selo vermelho: enquanto estiver na tela, ninguém corta. */
+@Composable
+fun HaltMark(modifier: Modifier = Modifier) {
+    val scale = remember { Animatable(1.8f) }
+    LaunchedEffect(Unit) {
+        scale.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+    }
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+            }
+            .size(190.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Iai.Shu.copy(alpha = 0.92f))
+            .border(4.dp, Iai.Sumi, RoundedCornerShape(18.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "止",
+            fontFamily = BrushFont,
+            fontSize = 140.sp,
+            lineHeight = 150.sp,
+            color = Iai.Washi
+        )
+    }
+}
+
 /** O grande "!" em pincel vermelho. */
 @Composable
-fun SignalMark(modifier: Modifier = Modifier) {
+fun SignalMark(modifier: Modifier = Modifier, alpha: Float = 1f) {
     val scale = remember { Animatable(2.2f) }
     LaunchedEffect(Unit) {
         scale.animateTo(1f, tween(140, easing = FastOutSlowInEasing))
@@ -241,7 +298,7 @@ fun SignalMark(modifier: Modifier = Modifier) {
         fontFamily = BrushFont,
         fontSize = 220.sp,
         lineHeight = 220.sp,
-        color = Iai.Shu,
+        color = Iai.Shu.copy(alpha = alpha),
         modifier = modifier.graphicsLayer {
             scaleX = scale.value
             scaleY = scale.value
@@ -256,7 +313,9 @@ fun PhasePrompt(
     phase: RoundPhase,
     signalMode: SignalMode,
     modifier: Modifier = Modifier,
-    touchScabbard: Boolean = false
+    touchScabbard: Boolean = false,
+    /** Regra do Gensai: o sinal não aparece, só se ouve. */
+    soundOnly: Boolean = false
 ) {
     val transition = rememberInfiniteTransition(label = "prompt")
     val pulse by transition.animateFloat(
@@ -276,17 +335,23 @@ fun PhasePrompt(
         RoundPhase.PREPARE -> "Prepare-se" to
             "Posicione a lâmina e fique parado."
 
-        RoundPhase.WAITING ->
-            (if (signalMode == SignalMode.CLAP) "Aguarde a palma…" else "Aguarde…") to
-                "Segure firme. Quem se mexer antes do sinal perde."
+        RoundPhase.WAITING -> when {
+            signalMode == SignalMode.CLAP -> "Aguarde a palma…" to "Segure firme. Quem se mexer antes do sinal perde."
+            soundOnly -> "Escute…" to "O sinal não vai aparecer. Corte ao som da madeira."
+            else -> "Aguarde…" to "Segure firme. Quem se mexer antes do sinal perde."
+        }
 
-        RoundPhase.SIGNAL -> "SAQUE!" to ""
+        RoundPhase.FEINT -> "Aguarde…" to "É uma finta! Não se mexa."
+
+        RoundPhase.HALT -> "止 — Pare!" to "Segure a lâmina até o selo sumir."
+
+        RoundPhase.SIGNAL, RoundPhase.SIGNAL_FADED -> "SAQUE!" to ""
     }
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (phase != RoundPhase.SIGNAL) {
+        if (phase != RoundPhase.SIGNAL && phase != RoundPhase.SIGNAL_FADED) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.displaySmall,

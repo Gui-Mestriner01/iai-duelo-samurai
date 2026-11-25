@@ -40,9 +40,14 @@ fun HomeScreen(
     onTraining: () -> Unit,
     onRecords: () -> Unit,
     onSettings: () -> Unit,
-    viewModel: StatsViewModel = viewModel(factory = StatsViewModel.Factory)
+    onHorde: () -> Unit,
+    onShop: () -> Unit,
+    onAchievements: () -> Unit,
+    viewModel: StatsViewModel = viewModel(factory = StatsViewModel.Factory),
+    progressViewModel: ProgressViewModel = viewModel(factory = ProgressViewModel.Factory)
 ) {
     val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val progress by progressViewModel.progress.collectAsStateWithLifecycle()
     val next = viewModel.nextOpponent(stats)
 
     WashiBackground {
@@ -59,11 +64,7 @@ fun HomeScreen(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 HankoSeal(text = "侍", size = 40.dp, rotation = -8f)
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = "UM SINAL · UM GOLPE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Iai.SumiSoft
-                )
+                CoinBalance(progress.coins)
             }
 
             // Ensō com 居合 na vertical
@@ -112,6 +113,17 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
                 BrushButton(
+                    text = "Hordas",
+                    kanji = "波",
+                    subtitle = if (progress.hordeBestScore > 0) {
+                        "Recorde: ${progress.hordeBestScore} pontos · onda ${progress.hordeBestWave}"
+                    } else {
+                        "Inimigos sem fim, chefes a cada 5 ondas"
+                    },
+                    onClick = onHorde,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                BrushButton(
                     text = "Dois jogadores",
                     kanji = "対戦",
                     subtitle = "Desafie alguém no mesmo celular",
@@ -125,6 +137,22 @@ fun HomeScreen(
                     onClick = onTraining,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BrushButton(
+                        text = "Loja",
+                        onClick = onShop,
+                        centered = true,
+                        height = 62.dp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    BrushButton(
+                        text = "Conquistas",
+                        onClick = onAchievements,
+                        centered = true,
+                        height = 62.dp,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     BrushButton(
                         text = "Registros",
@@ -147,6 +175,7 @@ fun HomeScreen(
             Text(
                 text = buildString {
                     append("Vitórias ${stats.wins}")
+                    append("  ·  Selos ${progress.achievements.size}")
                     append("  ·  Melhor reação ")
                     append(stats.bestReactionMs?.let(::formatSeconds) ?: "—")
                 },

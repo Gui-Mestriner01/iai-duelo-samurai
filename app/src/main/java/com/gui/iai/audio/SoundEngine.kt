@@ -14,10 +14,10 @@ import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.math.tanh
 
-enum class Sfx { TAIKO, SIGNAL, SLASH, VICTORY, DEFEAT, FOUL, WIND }
+enum class Sfx { TAIKO, SIGNAL, SLASH, VICTORY, DEFEAT, FOUL, WIND, FEINT, HALT, PERFECT }
 
 /**
- * Todos os sons do jogo são sintetizados na hora (nenhum arquivo de áudio):
+ * Sons do jogo sintetizados na hora (os sons de corte gravados ficam em [CutVoices]):
  * tambor taiko, batida de madeira (hyoshigi), corte da lâmina, sino e vento.
  */
 class SoundEngine {
@@ -102,6 +102,59 @@ class SoundEngine {
         Sfx.DEFEAT -> defeat()
         Sfx.FOUL -> foul()
         Sfx.WIND -> wind()
+        Sfx.FEINT -> feint()
+        Sfx.HALT -> gong()
+        Sfx.PERFECT -> chime()
+    }
+
+    /** Batida abafada, parecida com o sinal mas grave (a finta). */
+    private fun feint(): ShortArray {
+        val noise = Random(5)
+        val n = samples(0.25)
+        val out = FloatArray(n)
+        for (i in 0 until n) {
+            val t = i / SAMPLE_RATE.toDouble()
+            val env = exp(-t * 28)
+            val tone = sin(2 * PI * 520 * t) + 0.4 * sin(2 * PI * 1040 * t)
+            val click = (noise.nextDouble() * 2 - 1) * exp(-t * 120) * 0.4
+            out[i] = (tone * env * 0.5 + click).toFloat()
+        }
+        return toPcm(out, 0.7f)
+    }
+
+    /** Gongo grave: o 止 apareceu. */
+    private fun gong(): ShortArray {
+        val n = samples(1.4)
+        val out = FloatArray(n)
+        for (i in 0 until n) {
+            val t = i / SAMPLE_RATE.toDouble()
+            val wobble = 1 + 0.004 * sin(2 * PI * 5 * t)
+            val s = sin(2 * PI * 98 * wobble * t) + 0.6 * sin(2 * PI * 161 * t) * exp(-t * 2) +
+                0.3 * sin(2 * PI * 263 * t) * exp(-t * 3.5)
+            val attack = if (t < 0.01) t / 0.01 else 1.0
+            out[i] = (s * exp(-t * 1.6) * attack * 0.55).toFloat()
+        }
+        return toPcm(out, 0.9f)
+    }
+
+    /** Brilho de sininhos subindo: Iai Perfeito. */
+    private fun chime(): ShortArray {
+        val n = samples(1.1)
+        val out = FloatArray(n)
+        val notes = doubleArrayOf(880.0, 1174.7, 1568.0, 2093.0)
+        for (i in 0 until n) {
+            val t = i / SAMPLE_RATE.toDouble()
+            var s = 0.0
+            for (k in notes.indices) {
+                val start = k * 0.07
+                if (t >= start) {
+                    val tt = t - start
+                    s += sin(2 * PI * notes[k] * tt) * exp(-tt * 4.5) * 0.4
+                }
+            }
+            out[i] = s.toFloat()
+        }
+        return toPcm(out, 0.9f)
     }
 
     /** Tambor grave com o pitch caindo. */

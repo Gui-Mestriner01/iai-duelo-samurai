@@ -15,7 +15,10 @@ import androidx.navigation.navArgument
 import com.gui.iai.ui.calibration.CalibrationScreen
 import com.gui.iai.ui.duel.DuelScreen
 import com.gui.iai.ui.duel.DuelViewModel
+import com.gui.iai.ui.horde.HordeScreen
+import com.gui.iai.ui.menu.AchievementsScreen
 import com.gui.iai.ui.menu.HomeScreen
+import com.gui.iai.ui.menu.ShopScreen
 import com.gui.iai.ui.menu.PathScreen
 import com.gui.iai.ui.menu.RecordsScreen
 import com.gui.iai.ui.menu.SettingsScreen
@@ -31,6 +34,9 @@ private object Routes {
     const val RECORDS = "records"
     const val SETTINGS = "settings"
     const val CALIBRATE = "calibrate"
+    const val HORDE = "horde"
+    const val SHOP = "shop"
+    const val ACHIEVEMENTS = "achievements"
 
     fun duel(opponentId: String) = "duel/$opponentId"
 }
@@ -51,8 +57,23 @@ fun IaiNavHost(navController: NavHostController = rememberNavController()) {
                 onVersus = { entry.ifResumed { navController.navigate(Routes.VERSUS) } },
                 onTraining = { entry.ifResumed { navController.navigate(Routes.TRAINING) } },
                 onRecords = { entry.ifResumed { navController.navigate(Routes.RECORDS) } },
-                onSettings = { entry.ifResumed { navController.navigate(Routes.SETTINGS) } }
+                onSettings = { entry.ifResumed { navController.navigate(Routes.SETTINGS) } },
+                onHorde = { entry.ifResumed { navController.navigate(Routes.HORDE) } },
+                onShop = { entry.ifResumed { navController.navigate(Routes.SHOP) } },
+                onAchievements = { entry.ifResumed { navController.navigate(Routes.ACHIEVEMENTS) } }
             )
+        }
+
+        composable(Routes.HORDE) { entry ->
+            HordeScreen(onExit = { entry.ifResumed { navController.popBackStack() } })
+        }
+
+        composable(Routes.SHOP) { entry ->
+            ShopScreen(onBack = { entry.ifResumed { navController.popBackStack() } })
+        }
+
+        composable(Routes.ACHIEVEMENTS) { entry ->
+            AchievementsScreen(onBack = { entry.ifResumed { navController.popBackStack() } })
         }
 
         composable(Routes.PATH) { entry ->

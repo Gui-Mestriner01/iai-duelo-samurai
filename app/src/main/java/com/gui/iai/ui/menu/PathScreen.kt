@@ -57,7 +57,7 @@ fun PathScreen(
             ScreenHeader(kanji = "道", title = "O Caminho", onBack = onBack)
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Vença cada oponente para enfrentar o próximo. Cada duelo é melhor de 3 golpes.",
+                text = "Vença cada oponente para enfrentar o próximo. Os chefes têm regras especiais.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Iai.SumiSoft
             )
@@ -155,6 +155,21 @@ private fun PathStep(
             )
             Spacer(Modifier.height(8.dp))
             SpeedDots(level = opponent.speedLevel)
+            if (unlocked && opponent.rules.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    opponent.rules.forEach { rule ->
+                        HankoSeal(text = rule.kanji, size = 24.dp, color = Iai.Sumi, rotation = 4f)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = opponent.rules.joinToString(" · ") { it.title },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Iai.SumiSoft
+                    )
+                }
+            }
         }
     }
 }

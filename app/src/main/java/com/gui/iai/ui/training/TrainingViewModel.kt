@@ -3,11 +3,13 @@ package com.gui.iai.ui.training
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gui.iai.core.iaiFactory
+import com.gui.iai.data.progress.ProgressRepository
 import com.gui.iai.data.settings.GameSettings
 import com.gui.iai.data.settings.SettingsRepository
 import com.gui.iai.data.settings.ScabbardSource
 import com.gui.iai.data.settings.SignalMode
 import com.gui.iai.data.stats.StatsRepository
+import com.gui.iai.domain.Rewards
 import com.gui.iai.game.Feedback
 import com.gui.iai.game.RoundConfig
 import com.gui.iai.game.RoundOutcome
@@ -17,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -45,6 +48,7 @@ data class TrainingUiState(
 class TrainingViewModel(
     private val settingsRepository: SettingsRepository,
     private val statsRepository: StatsRepository,
+    private val progressRepository: ProgressRepository,
     private val runner: RoundRunner,
     private val feedback: Feedback
 ) : ViewModel() {
@@ -91,7 +95,7 @@ class TrainingViewModel(
                 when (phase) {
                     RoundPhase.WAITING -> feedback.tension(settings)
                     RoundPhase.SIGNAL -> feedback.signal(settings, signal)
-                    RoundPhase.SHEATHING, RoundPhase.PREPARE -> Unit
+                    else -> Unit
                 }
             }
             feedback.stopAmbient()
@@ -101,6 +105,14 @@ class TrainingViewModel(
                     feedback.strike(settings)
                     statsRepository.recordReaction(outcome.reactionMs)
                     statsRepository.recordTrainingStrike()
+                    // Cada corte no treino rende 1 mon (2 no Iai Perfeito)
+                    val perfect = Rewards.isPerfect(outcome.reactionMs)
+                    if (perfect) {
+                        feedback.perfect(settings)
+                        progressRepository.recordPerfect()
+                    }
+                    progressRepository.addCoins(Rewards.trainingCoins(perfect))
+                    progressRepository.checkAchievements(statsRepository.stats.first())
                     _state.update {
                         it.copy(stage = TrainingStage.Result(outcome), times = it.times + outcome.reactionMs)
                     }
@@ -142,6 +154,7 @@ class TrainingViewModel(
             TrainingViewModel(
                 container.settingsRepository,
                 container.statsRepository,
+                container.progressRepository,
                 container.roundRunner,
                 container.feedback
             )

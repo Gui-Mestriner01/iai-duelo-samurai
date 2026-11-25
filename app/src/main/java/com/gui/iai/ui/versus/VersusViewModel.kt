@@ -2,6 +2,7 @@ package com.gui.iai.ui.versus
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.gui.iai.audio.CutVoice
 import com.gui.iai.core.iaiFactory
 import com.gui.iai.data.settings.GameSettings
 import com.gui.iai.data.settings.SettingsRepository
@@ -120,7 +121,7 @@ class VersusViewModel(
                 when (phase) {
                     RoundPhase.WAITING -> feedback.tension(settings)
                     RoundPhase.SIGNAL -> feedback.signal(settings, signal)
-                    RoundPhase.SHEATHING, RoundPhase.PREPARE -> Unit
+                    else -> Unit
                 }
             }
             feedback.stopAmbient()
@@ -135,6 +136,8 @@ class VersusViewModel(
 
                 is RoundOutcome.PlayerFoul -> {
                     feedback.foul(settings)
+                    // Quem se precipitou cai na tela
+                    feedback.cut(settings, CutVoice.PLAYER)
                     TurnResult(player, null, foul = true, peakG = null)
                 }
 

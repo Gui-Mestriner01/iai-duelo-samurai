@@ -30,11 +30,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.gui.iai.domain.Achievement
+import com.gui.iai.domain.BossRule
 import com.gui.iai.domain.Opponent
+import com.gui.iai.domain.Story
+import com.gui.iai.ui.story.StoryOverlay
 import com.gui.iai.game.RoundPhase
 import com.gui.iai.ui.components.BrushButton
 import com.gui.iai.ui.components.HankoSeal
@@ -99,14 +104,21 @@ fun DuelScreen(
 
     val showResult = stage is DuelStage.RoundOver || stage is DuelStage.MatchOver
     val report = state.lastReport
+    val phase = (stage as? DuelStage.InRound)?.phase
+    val blizzard = BossRule.BLIZZARD in state.opponent.rules
     val scene = SceneState(
         leftPose = if (showResult && report?.winner == Side.PLAYER) SamuraiPose.STRIKE else SamuraiPose.GUARD,
         rightPose = if (showResult && report?.winner == Side.OPPONENT) SamuraiPose.STRIKE else SamuraiPose.GUARD,
         leftFall = playerFall.value,
         rightFall = opponentFall.value,
+        leftObi = Color(state.loadout.obi.argb),
+        leftTrail = Color(state.loadout.blade.argb),
         rightObi = state.opponent.accentColor(),
         rightStyle = state.opponent.sceneStyle(),
-        tension = tension
+        tension = tension,
+        arena = state.opponent.arena,
+        blizzard = blizzard,
+        perfect = showResult && report?.perfect == true
     )
 
     GameStage(
@@ -114,16 +126,21 @@ fun DuelScreen(
         holdIndicator = state.scabbardActive && state.scabbardTouch && stage is DuelStage.InRound,
         scene = scene,
         effects = effects,
-        signalVisible = stage is DuelStage.InRound && stage.phase == RoundPhase.SIGNAL,
-        header = { DuelHeader(state, onExit) },
+        signalVisible = phase == RoundPhase.SIGNAL && !state.soundOnly,
+        feintVisible = phase == RoundPhase.FEINT,
+        haltVisible = phase == RoundPhase.HALT,
+        signalAlpha = if (blizzard) 0.5f else 1f,
+        header = { if (stage !is DuelStage.Story) DuelHeader(state, onExit) },
         sky = {
             when (stage) {
+                is DuelStage.Story -> Unit
                 DuelStage.Intro -> OpponentIntro(state.opponent)
                 DuelStage.Ready -> ReadyPrompt(state.roundNumber)
                 is DuelStage.InRound -> PhasePrompt(
                     phase = stage.phase,
                     signalMode = state.activeSignal,
-                    touchScabbard = state.scabbardActive && state.scabbardTouch
+                    touchScabbard = state.scabbardActive && state.scabbardTouch,
+                    soundOnly = state.soundOnly
                 )
                 is DuelStage.RoundOver -> RoundResultSky(stage.report, state.opponent)
                 is DuelStage.MatchOver -> Unit
@@ -131,6 +148,7 @@ fun DuelScreen(
         },
         ground = {
             when (stage) {
+                is DuelStage.Story -> Unit
                 DuelStage.Intro -> GroundButton("Aceitar o duelo", "決", viewModel::startRound)
                 DuelStage.Ready -> GroundButton("Preparar golpe ${state.roundNumber}", "構", viewModel::startRound)
                 is DuelStage.InRound -> HoldStillHint(touchScabbard = state.scabbardActive && state.scabbardTouch)
@@ -145,6 +163,18 @@ fun DuelScreen(
             }
         },
         overlay = {
+            if (stage is DuelStage.Story) {
+                val lines = state.story
+                StoryOverlay(
+                    opponent = state.opponent,
+                    line = lines[stage.index.coerceIn(0, lines.lastIndex)],
+                    index = stage.index,
+                    total = lines.size,
+                    heroObi = Color(state.loadout.obi.argb),
+                    onNext = viewModel::advanceStory,
+                    onSkip = viewModel::skipStory
+                )
+            }
             if (stage is DuelStage.MatchOver) {
                 MatchOverOverlay(
                     state = state,
@@ -167,7 +197,7 @@ private fun DuelHeader(state: DuelUiState, onExit: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text("VOCÊ", style = MaterialTheme.typography.labelMedium, color = Iai.Sumi)
-            RoundMarkers(wins = state.playerWins, filledColor = Iai.Shu)
+            RoundMarkers(wins = state.playerWins, filledColor = Iai.Shu, total = state.winsToBeat)
         }
         Text(
             text = "GOLPE ${state.roundNumber}",
@@ -181,7 +211,7 @@ private fun DuelHeader(state: DuelUiState, onExit: () -> Unit) {
                 color = Iai.Sumi,
                 maxLines = 1
             )
-            RoundMarkers(wins = state.opponentWins, filledColor = Iai.Sumi)
+            RoundMarkers(wins = state.opponentWins, filledColor = Iai.Sumi, total = Opponent.OPPONENT_WINS_NEEDED)
         }
     }
 }
@@ -200,6 +230,27 @@ private fun OpponentIntro(opponent: Opponent) {
             color = Iai.SumiSoft,
             textAlign = TextAlign.Center
         )
+        if (opponent.rules.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            BossRules(opponent.rules)
+        }
+    }
+}
+
+/** As regras especiais do chefe, cada uma com o seu selo. */
+@Composable
+fun BossRules(rules: Set<BossRule>, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        rules.forEach { rule ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                HankoSeal(text = rule.kanji, size = 30.dp, color = Iai.Sumi, rotation = -4f)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(rule.title.uppercase(), style = MaterialTheme.typography.labelMedium, color = Iai.Shu)
+                    Text(rule.description, style = MaterialTheme.typography.bodySmall, color = Iai.SumiSoft)
+                }
+            }
+        }
     }
 }
 
@@ -207,7 +258,7 @@ private fun OpponentIntro(opponent: Opponent) {
 fun SpeedDots(level: Int, modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color = Iai.Sumi) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text("VELOCIDADE ", style = MaterialTheme.typography.labelSmall, color = color)
-        repeat(5) { index ->
+        repeat(Opponent.entries.size) { index ->
             Box(
                 Modifier
                     .padding(horizontal = 2.dp)
@@ -238,6 +289,8 @@ private fun reasonText(report: RoundReport, opponent: Opponent): String = when (
     RoundReason.TOO_SLOW -> "Você hesitou. A lâmina dele chegou primeiro."
     RoundReason.PLAYER_EARLY_SWING -> "Precipitado! Você sacou antes do sinal."
     RoundReason.PLAYER_EARLY_DRAW -> "Você desembainhou antes do sinal."
+    RoundReason.PLAYER_FEINT -> "Caiu na finta! Aquele não era o sinal."
+    RoundReason.PLAYER_HALT -> "O 止 estava na tela. A lâmina tinha que esperar."
     RoundReason.OPPONENT_EARLY -> "${opponent.displayName} se precipitou! O golpe é seu."
 }
 
@@ -246,17 +299,36 @@ private fun RoundResultSky(report: RoundReport, opponent: Opponent) {
     val won = report.winner == Side.PLAYER
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         HankoSeal(
-            text = if (won) "勝" else "敗",
-            size = 72.dp,
-            color = if (won) Iai.Shu else Iai.Sumi,
+            text = when {
+                report.perfect -> "極"
+                won -> "勝"
+                else -> "敗"
+            },
+            size = if (report.perfect) 86.dp else 72.dp,
+            color = when {
+                report.perfect -> Iai.Coin
+                won -> Iai.Shu
+                else -> Iai.Sumi
+            },
             stampIn = true
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = if (won) "Golpe vencido" else "Golpe perdido",
+            text = when {
+                report.perfect -> "IAI PERFEITO!"
+                won -> "Golpe vencido"
+                else -> "Golpe perdido"
+            },
             style = MaterialTheme.typography.headlineLarge,
-            color = Iai.Sumi
+            color = if (report.perfect) Iai.Shu else Iai.Sumi
         )
+        if (report.perfect) {
+            Text(
+                text = "Vale dois golpes!",
+                style = MaterialTheme.typography.titleSmall,
+                color = Iai.Shu
+            )
+        }
         Text(
             text = reasonText(report, opponent),
             style = MaterialTheme.typography.bodyMedium,
@@ -291,6 +363,7 @@ private fun BoxScope.RoundResultGround(
             )
         }
         report.peakG?.let { GroundLabel("Força do corte: ${formatG(it)}") }
+        if (report.coins > 0) GroundLabel("+${report.coins} 文", alpha = 1f)
         GroundButton(
             text = if (matchDecided) "Ver resultado" else "Próximo golpe",
             kanji = if (matchDecided) "終" else "次",
@@ -360,13 +433,7 @@ private fun MatchOverOverlay(
                     color = Iai.SumiSoft
                 )
                 val message = when {
-                    won && state.unlocked != null ->
-                        "Novo desafiante no Caminho: ${state.unlocked.displayName}, ${state.unlocked.title}."
-
-                    won && state.opponent == Opponent.KUROGANE ->
-                        "Você derrotou o Demônio de Ferro. O Caminho está completo."
-
-                    won -> "A honra foi mantida."
+                    won -> Story.epilogue(state.opponent)
                     else -> "Um samurai cai sete vezes e levanta oito."
                 }
                 Spacer(Modifier.height(10.dp))
@@ -376,6 +443,27 @@ private fun MatchOverOverlay(
                     color = if (won) Iai.Shu else Iai.SumiSoft,
                     textAlign = TextAlign.Center
                 )
+                if (won && state.unlocked != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Novo desafiante: ${state.unlocked.displayName}, ${state.unlocked.title}.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Iai.Shu,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                if (state.coinsEarned > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "+${state.coinsEarned} 文",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Iai.Coin
+                    )
+                }
+                if (state.newAchievements.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    NewAchievements(state.newAchievements)
+                }
                 Spacer(Modifier.height(18.dp))
                 BrushButton(
                     text = "Revanche",
@@ -392,6 +480,28 @@ private fun MatchOverOverlay(
                     height = 64.dp,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+        }
+    }
+}
+
+/** Conquistas que acabaram de sair, com o selo carimbando. */
+@Composable
+fun NewAchievements(achievements: List<Achievement>, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("CONQUISTA!", style = MaterialTheme.typography.labelMedium, color = Iai.Shu)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            achievements.take(4).forEach { achievement ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    HankoSeal(text = achievement.kanji, size = 46.dp, stampIn = true)
+                    Text(
+                        text = achievement.title,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Iai.Sumi,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
     }

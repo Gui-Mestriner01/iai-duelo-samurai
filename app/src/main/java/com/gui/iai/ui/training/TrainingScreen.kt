@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,15 +42,18 @@ import com.gui.iai.ui.game.PhasePrompt
 import com.gui.iai.ui.game.formatG
 import com.gui.iai.ui.game.formatSeconds
 import com.gui.iai.ui.game.rememberStrikeEffects
+import com.gui.iai.ui.menu.ProgressViewModel
 import com.gui.iai.ui.theme.Iai
 import kotlinx.coroutines.launch
 
 @Composable
 fun TrainingScreen(
     onExit: () -> Unit,
-    viewModel: TrainingViewModel = viewModel(factory = TrainingViewModel.Factory)
+    viewModel: TrainingViewModel = viewModel(factory = TrainingViewModel.Factory),
+    progressViewModel: ProgressViewModel = viewModel(factory = ProgressViewModel.Factory)
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val progress by progressViewModel.progress.collectAsStateWithLifecycle()
     GameplayLifecycle(onStop = viewModel::abort)
 
     val effects = rememberStrikeEffects()
@@ -84,6 +88,8 @@ fun TrainingScreen(
         scene = SceneState(
             leftPose = if (struck) SamuraiPose.STRIKE else SamuraiPose.GUARD,
             rightFigure = RightFigure.MAKIWARA,
+            leftObi = Color(progress.loadout.obi.argb),
+            leftTrail = Color(progress.loadout.blade.argb),
             tension = tension,
             cut = cut.value
         ),

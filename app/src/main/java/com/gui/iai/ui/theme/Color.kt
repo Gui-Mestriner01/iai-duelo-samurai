@@ -44,4 +44,9 @@ object Iai {
     val SteelEdge = Color(0xFF8D9399)
     val Ai = Color(0xFF3E5C8A)
     val Ash = Color(0xFF8A8F94)
+    val Blood = Color(0xFF8E1F1A)
+    val Ice = Color(0xFFBFE3F2)
+    val Yoru = Color(0xFF6A4BA0)
+    val PerfectGold = Color(0xFFFFD36B)
+    val Coin = Color(0xFFC9962E)
 }

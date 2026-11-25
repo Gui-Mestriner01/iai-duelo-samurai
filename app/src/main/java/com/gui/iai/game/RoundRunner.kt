@@ -120,15 +120,38 @@ class RoundRunner(
 
         val signalAt: Long
         if (config.signalMode == SignalMode.VISUAL) {
-            val waitMs = Random.nextLong(config.minWaitMs, config.maxWaitMs + 1)
+            val tricky = config.feints > 0 || config.halt
+            val baseWait = Random.nextLong(config.minWaitMs, config.maxWaitMs + 1)
+            val waitMs = if (tricky) maxOf(baseWait, minimumWaitFor(config.feints, config.halt)) else baseWait
             val signalDeadline = waitStart + waitMs * MILLIS
-            val deadline = opponentFoulAtNanos?.coerceAtMost(signalDeadline) ?: signalDeadline
+            val opponentFoulAt = opponentFoulAtNanos?.takeIf { it <= signalDeadline }
+            // Fintas e 止 planejados para esta espera
+            val cues = planCues(waitMs, config.feints, config.halt, Random.Default)
+            var cueIndex = 0
+            var phase = RoundPhase.WAITING
             while (true) {
-                val input = receiveUntil(inputs, deadline) ?: break
-                foulFor(input, config)?.let { return RoundOutcome.PlayerFoul(it) }
-            }
-            if (opponentFoulAtNanos != null && opponentFoulAtNanos <= signalDeadline) {
-                return RoundOutcome.OpponentFoul
+                val cue = cues.getOrNull(cueIndex)
+                val cueBoundary = cue?.let {
+                    waitStart + (if (phase == RoundPhase.WAITING) it.startMs else it.endMs) * MILLIS
+                }
+                val boundary = listOfNotNull(cueBoundary, signalDeadline, opponentFoulAt).min()
+                val input = receiveUntil(inputs, boundary)
+                if (input != null) {
+                    foulFor(input, config, phase)?.let { return RoundOutcome.PlayerFoul(it) }
+                    continue
+                }
+                val t = now()
+                if (opponentFoulAt != null && t >= opponentFoulAt) return RoundOutcome.OpponentFoul
+                if (t >= signalDeadline) break
+                if (cue != null && cueBoundary != null && t >= cueBoundary) {
+                    if (phase == RoundPhase.WAITING) {
+                        phase = cue.phase
+                    } else {
+                        phase = RoundPhase.WAITING
+                        cueIndex++
+                    }
+                    onPhase(phase)
+                }
             }
             signalAt = now()
         } else {
@@ -140,7 +163,7 @@ class RoundRunner(
                 if (input is Input.Clap) {
                     clapAt = input.timestampNanos
                 } else {
-                    foulFor(input, config)?.let { return RoundOutcome.PlayerFoul(it) }
+                    foulFor(input, config, RoundPhase.WAITING)?.let { return RoundOutcome.PlayerFoul(it) }
                 }
             }
             signalAt = clapAt
@@ -150,8 +173,20 @@ class RoundRunner(
         onPhase(RoundPhase.SIGNAL)
         val limitNanos = config.reactionLimitMs * MILLIS
         val deadline = signalAt + limitNanos + GRACE_MS * MILLIS
+        // Relâmpago e nevasca: o sinal some da tela, mas o golpe continua valendo
+        val fadeAt = config.signalVisibleMs?.let { signalAt + it * MILLIS }?.takeIf { it < deadline }
+        var faded = false
         while (true) {
-            val input = receiveUntil(inputs, deadline) ?: break
+            val boundary = if (fadeAt != null && !faded) fadeAt else deadline
+            val input = receiveUntil(inputs, boundary)
+            if (input == null) {
+                if (fadeAt != null && !faded) {
+                    faded = true
+                    onPhase(RoundPhase.SIGNAL_FADED)
+                    continue
+                }
+                break
+            }
             if (input is Input.Swing) {
                 // Corte confirmado antes do sinal = precipitado
                 if (input.hitNanos < signalAt) return RoundOutcome.PlayerFoul(FoulReason.EARLY_SWING)
@@ -166,10 +201,15 @@ class RoundRunner(
         return RoundOutcome.TooSlow
     }
 
-    private fun foulFor(input: Input, config: RoundConfig): FoulReason? = when {
-        input is Input.Swing -> FoulReason.EARLY_SWING
-        input is Input.Scabbard && config.scabbardMode && !input.sheathed -> FoulReason.EARLY_DRAW
-        else -> null
+    private fun foulFor(input: Input, config: RoundConfig, phase: RoundPhase): FoulReason? {
+        val moved = input is Input.Swing ||
+            (input is Input.Scabbard && config.scabbardMode && !input.sheathed)
+        if (!moved) return null
+        return when (phase) {
+            RoundPhase.FEINT -> FoulReason.FEINT
+            RoundPhase.HALT -> FoulReason.HALT
+            else -> if (input is Input.Swing) FoulReason.EARLY_SWING else FoulReason.EARLY_DRAW
+        }
     }
 
     private suspend fun receiveUntil(inputs: Channel<Input>, deadlineNanos: Long): Input? {
