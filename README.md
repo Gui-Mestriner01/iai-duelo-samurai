@@ -81,7 +81,7 @@ Os testes de unidade (JUnit) ficam em `app/src/test` e cobrem:
 - a linha do tempo do golpe;
 - a linha do tempo da morte e do noto.
 
-O GitHub Actions (`.github/workflows/android.yml`) roda `testDebugUnitTest` e `assembleDebug` a cada push e guarda o APK como artefato.
+O GitHub Actions (`.github/workflows/android.yml`) roda `testDebugUnitTest` e `assembleDebug` a cada push e publica o APK na página de [versões](https://github.com/Gui-Mestriner01/iai-duelo-samurai/releases/latest), pronto para baixar no celular.
 
 ```
 ./gradlew testDebugUnitTest assembleDebug
